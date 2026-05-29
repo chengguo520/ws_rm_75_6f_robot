@@ -1,0 +1,236 @@
+RM75-6F migration status
+Date: 2026-05-25
+
+Workspace
+---------
+New isolated workspace:
+/home/ros/ws_rm_75_6f_robot
+
+It explicitly extends only:
+/opt/ros/noetic
+
+The original official RM75-B learning baseline is kept unchanged:
+/home/ros/ws_rm_75_robot
+
+
+What has been done
+------------------
+1. Copied the clean official RM75 ROS workspace source into the new 6F workspace.
+2. Added the official RM75-6F URDF package from:
+   /home/ros/机械臂/RM-75系列机械臂/（4）ROS资料/RM75系列URDF文件/rm_75_6f_description
+3. Fixed only the 6F display launch in the new workspace:
+   /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/launch/display.launch
+4. The fixed display launch now loads the official 6F URDF and starts:
+   - joint_state_publisher_gui, when gui:=true
+   - joint_state_publisher, when gui:=false
+   - robot_state_publisher
+   - rviz, when rviz:=true
+
+
+Validation already passed
+-------------------------
+1. rosdep:
+   rosdep install -y --from-paths . --ignore-src --rosdistro noetic -r
+   Result: all required rosdeps installed successfully.
+
+2. Build:
+   catkin build --summarize
+   Result: all 10 packages succeeded.
+
+3. URDF parse:
+   check_urdf rm_75_6f_description/urdf/rm_75_6f_description.urdf
+   Result: successfully parsed XML.
+
+4. 6F kinematic chain:
+   base_link -> link1 -> link2 -> link3 -> link4 -> link5 -> link6 -> link7
+
+5. Display launch node expansion:
+   roslaunch rm_75_6f_description display.launch gui:=false rviz:=false --nodes
+   Result:
+   /joint_state_publisher
+   /robot_state_publisher
+
+
+How to run the current 6F display stage
+---------------------------------------
+Open a terminal:
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_6f_description display.launch
+
+This stage is only for RViz model display. It does not use Gazebo, MoveIt,
+ros_control, or the real robot.
+
+
+Important model difference
+--------------------------
+Official RM75-B workspace:
+base_link, Link1, Link2, ..., Link7
+
+Official RM75-6F URDF:
+base_link, link1, link2, ..., link7
+
+The joint names are still:
+joint1, joint2, ..., joint7
+
+This means controller YAML files that depend only on joint names are likely
+reusable. MoveIt SRDF and collision matrices must be migrated carefully because
+they reference link names.
+
+
+Next recommended stage
+----------------------
+MoveIt-only migration is now complete:
+1. MoveIt loads the 6F robot_description from rm_75_6f_description.
+2. rm_75.srdf uses the 6F robot name and lowercase link names:
+   base_link -> link1 -> ... -> link7
+3. The arm chain tip_link is link7.
+4. joint_limits.yaml uses the 6F URDF's conservative 1.0 rad/s velocity limit.
+5. sensors_3d.yaml is set to an empty list because no 3D sensor is used.
+
+Validation command:
+timeout 14s bash -lc 'source /home/ros/ws_rm_75_6f_robot/devel/setup.bash && roslaunch rm_75_moveit_config demo.launch use_rviz:=false'
+
+Validation result:
+move_group loaded robot model 'rm_75_6f_description', initialized the fake arm
+controller for joint1..joint7, and printed "You can start planning now!".
+
+Remaining non-fatal warning:
+KDL warns that root link base_link has inertia. This comes from the official
+6F URDF. MoveIt still starts and plans. A later cleanup can add a dummy root
+wrapper xacro if we want to remove this warning.
+
+
+How to run the current 6F MoveIt stage
+--------------------------------------
+Open a terminal:
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_moveit_config demo.launch
+
+This stage uses fake execution only. It does not use Gazebo or the real robot.
+
+
+Next recommended stage
+----------------------
+6F Gazebo migration is now complete:
+1. Added the Gazebo-ready 6F xacro:
+   /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/urdf/rm_75_6f_gazebo.urdf.xacro
+2. The Gazebo xacro keeps the official 6F links/joints and adds:
+   - dummy root link
+   - bottom_link
+   - 7 PositionJointInterface transmissions
+   - gazebo_ros_control plugin under namespace /arm
+3. rm_75_gazebo now spawns the 6F Gazebo xacro:
+   /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/launch/arm_world.launch
+4. Gazebo PID gains were added under:
+   /arm/gazebo_ros_control/pid_gains/joint1..joint7
+5. Gazebo+MoveIt launch was changed so move_group does not overwrite
+   /robot_description after arm_world loads the Gazebo-ready xacro:
+   /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_moveit_config/launch/moveit_planning_execution.launch
+6. Auxiliary MoveIt Gazebo launch files were also pointed at the 6F xacro.
+7. rviz_gazebo.rviz was updated from Link1..Link7 to link1..link7.
+
+Validation already passed:
+1. xacro + check_urdf:
+   robot name: rm_75_6f_description
+   root Link: dummy
+   chain: dummy -> base_link -> link1 -> ... -> link7, with bottom_link fixed to base_link
+2. Build:
+   catkin build rm_75_6f_description rm_75_gazebo rm_75_moveit_config --summarize
+   Result: all 4 relevant packages succeeded.
+3. Runtime Gazebo+MoveIt:
+   roslaunch rm_75_gazebo arm_75_bringup_moveit.launch gui:=false
+   Result:
+   - Gazebo spawned rm_75_6f successfully.
+   - joint_state_controller is running.
+   - arm_joint_controller is running.
+   - /arm/joint_states publishes at 50 Hz.
+   - /arm/arm_joint_controller/follow_joint_trajectory action exists.
+   - move_group prints "You can start planning now!".
+
+
+How to run the current 6F Gazebo+MoveIt stage
+---------------------------------------------
+Open a terminal:
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+Useful checks in another terminal:
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosservice call /arm/controller_manager/list_controllers
+rostopic hz /arm/joint_states
+rostopic list | grep follow_joint_trajectory
+
+
+Next recommended stage
+----------------------
+Next step is a small 6F Gazebo execution demo:
+1. Send a tiny JointTrajectory action goal to /arm/arm_joint_controller/follow_joint_trajectory.
+2. Confirm the arm moves in Gazebo.
+3. Confirm RViz follows through /arm/joint_states.
+4. Only after this small motion demo is stable should we discuss real robot connection.
+
+
+Stability update
+----------------
+Date: 2026-05-26
+
+Symptom:
+Gazebo showed visible shaking after startup and MoveIt planning/execution could
+fail with an invalid-bounds start state.
+
+Likely cause:
+The first Gazebo migration used the official 6F collision/inertia model with no
+joint dynamics and a very stiff, weakly damped position PID:
+p=1000, d=0.1. In Gazebo this can create startup oscillation. If the current
+joint state jitters outside URDF limits even slightly, MoveIt rejects the start
+state as invalid bounds.
+
+Fix applied:
+1. Added damping/friction to joint1..joint7 in rm_75_6f_gazebo.urdf.xacro:
+   damping=5.0, friction=1.0
+2. Changed Gazebo ros_control PID gains to a more conservative setup:
+   p=250, i=0, d=20
+3. Changed Gazebo initial spawn pose from all-zero to the SRDF forward pose:
+   joint1=0
+   joint2=0.8395
+   joint3=0
+   joint4=1.4442
+   joint5=0
+   joint6=0.8513
+   joint7=0
+
+Validation:
+check_urdf still succeeds.
+catkin build rm_75_6f_description rm_75_gazebo rm_75_moveit_config --summarize
+succeeds.
+
+
+Ground-plane update
+-------------------
+Date: 2026-05-26
+
+Symptom:
+The base looked like it was sinking into the Gazebo ground plane.
+
+Cause:
+The Gazebo-only bottom_link is attached below base_link. With base_link spawned
+at z=0, the bottom plate intersects Gazebo's built-in ground_plane.
+
+Fix applied:
+The fixed dummy_joint now raises base_link by 0.03 m:
+dummy -> base_link origin xyz="0 0 0.03"
+
+This makes the bottom plate sit on the ground instead of penetrating it.
+
+Validation:
+check_urdf succeeds.
+catkin build rm_75_6f_description rm_75_gazebo rm_75_moveit_config --summarize
+succeeds.

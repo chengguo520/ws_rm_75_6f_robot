@@ -1,0 +1,503 @@
+RM75-6F 简化示教器使用说明
+日期：2026-05-27
+脚本：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/real_teach_pendant.py
+
+
+1. 功能
+======
+
+这个脚本把两个工具融合在一起：
+
+1. 多关节调试面板
+   - 显示当前关节角
+   - 用 + / - 或滑条调目标角
+   - 先 Plan，再 Execute planned
+
+2. TCP 末端位姿 IK 面板
+   - 显示当前末端 link7 的 x/y/z/roll/pitch/yaw
+   - 小步调整末端位置和姿态
+   - 点击 Plan IK，让 MoveIt 做 IK 和轨迹规划
+   - 再 Execute planned 执行
+
+3. 点位保存与复现
+   - 保存当前真实姿态为点位
+   - 保存当前目标姿态为点位
+   - 从点位库加载目标
+   - 对选中点位 Plan
+   - 对选中点位 Go
+
+整体更像一个简化版示教器。
+
+当前支持三种运动：
+
+MoveJ：
+关节空间运动。目标是 joint1..joint7，适合大范围换姿态。
+
+MoveL：
+末端笛卡尔直线运动。TCP 从当前点沿空间直线走到目标 TCP 点。
+
+MoveC：
+末端笛卡尔圆弧运动。TCP 从当前点出发，经过 via 点，最后到 end 点。
+
+当前支持速度档位：
+
+Teach 1%：
+极慢示教，第一次试动作优先用这个。
+
+Slow 3%：
+慢速调试，适合小范围 MoveL / MoveC。
+
+Normal 5%：
+默认学习速度。
+
+Fast 10%：
+较快调试，只建议在确认路径安全后使用。
+
+Auto 20%：
+脚本允许的最高档。学习阶段不建议直接用。
+
+这里要分清楚：
+
+关节角控制：
+你指定 joint1..joint7 的目标角度，MoveIt 做路径规划。
+
+末端位姿控制：
+你指定末端 link7 的 x/y/z/roll/pitch/yaw，MoveIt 先用 IK 反解出一组关节角，
+再做轨迹规划。
+
+
+2. 启动前提
+==========
+
+终端 1：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_control rm_75_control.launch
+
+终端 2：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_bringup rm_robot.launch arm_ip:=192.168.1.18
+
+确认：
+
+rosnode list
+
+应该有：
+
+/rm_75_control
+/rm_driver
+/move_group
+/robot_state_publisher
+
+
+3. 启动示教器
+============
+
+终端 3：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo real_teach_pendant.py --axes 7 --velocity 0.05 --acceleration 0.05
+
+只显示前 6 个轴：
+
+rosrun rm_75_demo real_teach_pendant.py --axes 6 --velocity 0.05 --acceleration 0.05
+
+指定末端 link，默认是 link7：
+
+rosrun rm_75_demo real_teach_pendant.py --eef-link link7
+
+默认点位文件：
+
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoints.yaml
+
+指定其他点位文件：
+
+rosrun rm_75_demo real_teach_pendant.py --store /tmp/test_waypoints.yaml
+
+
+4. 手动调关节
+============
+
+推荐流程：
+
+1. 点击 Sync current
+2. 选择 Step deg，例如 1.0 或 5.0
+3. 用每个关节的 + / - 或滑条设置目标
+4. 点击 Plan MoveJ
+5. 在 RViz 里看规划轨迹
+6. 点击 Execute planned
+7. 确认弹窗后执行
+8. 看状态栏反馈误差
+
+注意：
+
+- 拖滑条不会实时运动
+- 必须 Plan
+- 必须 Execute planned
+- Execute planned 前会弹确认框
+
+
+5. 保存点位
+==========
+
+面板右侧 Waypoints 区域：
+
+1. 在 Name 输入点位名，例如 safe_home
+2. 在 Note 输入备注，可为空
+3. 点击 Save current
+
+Save current：
+
+保存真实机械臂当前反馈姿态。
+新版会同时保存：
+
+- joint1..joint7
+- 当前 TCP 位姿 tcp_pose
+
+Save target：
+
+保存当前面板里的目标姿态。
+如果刚刚完成了 Plan IK / MoveL / MoveC，它会保存规划终点的关节角和 TCP 位姿。
+
+学习阶段优先用 Save current。
+
+
+6. 复现点位
+==========
+
+1. 在点位列表中选中某个点
+2. 点击 Load target
+3. 点击 Plan MoveJ
+4. 在 RViz 看轨迹
+5. 点击 Execute planned 或 Go MoveJ
+
+按钮区别：
+
+Load target：
+
+只把点位加载到目标，不规划，不执行。
+
+Plan MoveJ：
+
+加载选中点位，并调用 MoveIt Plan，不执行。
+
+Go MoveJ：
+
+加载选中点位，Plan，随后弹窗确认，确认后执行。
+
+
+7. MoveJ / MoveL / MoveC
+========================
+
+7.1 MoveJ：关节空间运动
+
+入口：
+
+- 底部 Plan MoveJ
+- 点位区 Plan MoveJ / Go MoveJ
+
+含义：
+
+MoveIt 在 joint1..joint7 的关节空间里规划。
+TCP 末端不保证走直线。
+
+适合：
+
+- 从一个姿态切换到另一个姿态
+- 回 safe_home
+- 大范围避障
+
+
+7.2 MoveL：末端直线运动
+
+入口 1：使用 TCP Pose IK 面板
+
+1. 点击 Sync current
+2. 在 TCP Pose IK 区域小幅调整 x/y/z
+3. 点击 Plan MoveL
+4. RViz 确认轨迹
+5. Execute planned
+
+入口 2：使用点位
+
+1. 先用新版 Save current 保存目标点位
+2. 选中点位
+3. 点击 Plan MoveL 或 Go MoveL
+
+含义：
+
+MoveIt 使用 compute_cartesian_path。
+TCP 从当前位姿沿笛卡尔空间直线走到目标位姿。
+
+注意：
+
+- 老点位没有 tcp_pose，只能 MoveJ，不能 MoveL
+- MoveL 规划会显示 cartesian fraction
+- fraction 低于 95% 时脚本会拒绝执行
+- 入门阶段先只动 x/y/z，不要同时大幅改变姿态
+
+
+7.3 MoveC：圆弧运动
+
+MoveC 需要三个点：
+
+- 当前 TCP 点：自动取机械臂当前位姿
+- via 点：圆弧经过点
+- end 点：圆弧终点
+
+操作：
+
+1. 移动机械臂到圆弧经由点
+2. Name 输入 arc_via
+3. 点击 Save current
+4. 移动机械臂到圆弧终点
+5. Name 输入 arc_end
+6. 点击 Save current
+7. 在点位列表选中 arc_via
+8. 点击 MoveC Arc 里的 Via / Use selected
+9. 在点位列表选中 arc_end
+10. 点击 MoveC Arc 里的 End / Use selected
+11. 点击 Plan MoveC
+12. RViz 确认轨迹
+13. Execute planned
+
+含义：
+
+脚本用当前点、via 点、end 点计算一个空间圆弧，
+再把圆弧采样成一串 TCP waypoint，
+最后交给 MoveIt compute_cartesian_path。
+
+注意：
+
+- 三点几乎共线时，MoveC 会拒绝，这种情况应该用 MoveL
+- via 点不能离当前点太近
+- MoveC 也会检查 cartesian fraction
+
+
+8. 速度档位
+==========
+
+顶部 Speed preset 用来快速设置 velocity / accel。
+
+档位对应：
+
+Teach 1%:
+
+velocity = 0.01
+accel = 0.01
+
+Slow 3%:
+
+velocity = 0.03
+accel = 0.03
+
+Normal 5%:
+
+velocity = 0.05
+accel = 0.05
+
+Fast 10%:
+
+velocity = 0.10
+accel = 0.08
+
+Auto 20%:
+
+velocity = 0.20
+accel = 0.12
+
+说明：
+
+- velocity / accel 都是 MoveIt scaling factor，不是直接的 rad/s 或 m/s
+- 真实速度还会受到厂家控制器、关节限速、轨迹长度影响
+- 手动拖 Velocity 或 Accel 滑条后，档位会变成 Custom
+- 第一次测试真实机械臂，优先用 Teach 1% 或 Slow 3%
+
+
+9. 安全限制
+==========
+
+1. 速度/加速度限制
+
+默认：
+
+velocity = 0.05
+acceleration = 0.05
+
+最大：
+
+0.20
+
+2. 滑条范围
+
+默认每个轴围绕 Sync current 姿态：
+
+±20 度
+
+3. URDF 关节限位
+
+脚本会读取 /robot_description 中的 URDF limit。
+如果目标超过关节上下限，会拒绝 Plan。
+
+4. 执行后反馈校验
+
+执行后会读取真实 /joint_states。
+如果目标和反馈误差超过 1 度，会弹出警告。
+
+5. TCP 位姿步长限制
+
+XYZ 单次偏移范围：
+
+±0.05 m
+
+RPY 单次偏移范围：
+
+±20 度
+
+学习阶段建议：
+
+XYZ step m = 0.005 或 0.01
+RPY step deg = 1.0 或 2.0
+
+
+10. TCP / IK 使用流程
+===================
+
+推荐先从很小的末端移动开始：
+
+1. 点击 Sync current
+2. 在 TCP Pose IK 区域选择：
+
+   XYZ step m = 0.005
+   RPY step deg = 1.0
+
+3. 只点一次 x + 或 z +
+4. 点击 Plan IK
+5. 在 RViz 里看橙色规划轨迹
+6. 确认安全后点击 Execute planned
+7. 看状态栏里的 joint feedback error 和 TCP error
+
+如果想把这个 TCP 目标存成点位：
+
+1. 先 Plan IK 成功
+2. 在 Name 里输入点位名
+3. 点击 Save target
+
+保存下来的仍然是 joint1..joint7 的关节角。
+原因是厂家底层执行链路最终吃的是关节轨迹，保存关节点位复现更稳定。
+
+注意：
+
+- TCP 区域的滑条/按钮也不会实时发给机械臂
+- Plan MoveJ 是关节角规划
+- Plan IK 是末端位姿目标规划，会触发 IK，但不保证 TCP 直线
+- Plan MoveL 是末端笛卡尔直线规划
+- Execute planned 执行的是最近一次规划出来的轨迹
+- 如果 IK Plan failed，通常说明目标位姿不可达、姿态约束太难，或者离奇异位形太近
+
+
+11. 正运动学与逆运动学在这个工具里的对应
+======================================
+
+正运动学 FK：
+
+关节角 -> 末端位姿
+
+在工具里对应：
+
+Joint Jog 调 joint1..joint7。
+MoveIt 知道当前关节角后，可以算出 link7 当前在哪里。
+
+逆运动学 IK：
+
+末端位姿 -> 关节角
+
+在工具里对应：
+
+TCP Pose IK 调 x/y/z/roll/pitch/yaw。
+点击 Plan IK 后，MoveIt 会调用 KDL IK，尝试求出一组能到达该末端位姿的 joint1..joint7。
+
+RM75 是 7 轴机械臂，通常同一个末端位姿可能有多组关节解。
+MoveIt 会从当前姿态附近找一组可行解，所以小步移动更容易成功，也更安全。
+
+
+12. 常见问题
+==========
+
+12.1 点 Execute 没反应
+
+先确认：
+
+rostopic list | grep /rm_75/follow_joint_trajectory
+
+如果没有，说明 rm_75_control 没启动。
+
+
+12.2 目标越界
+
+弹窗类似：
+
+target outside URDF limit
+
+说明目标角度超出 URDF 关节限制。
+点击 Sync current 后重新小幅调整。
+
+
+12.3 IK Plan failed
+
+常见原因：
+
+1. 目标位置太远，超出工作空间
+2. 姿态变化太大
+3. 当前姿态附近 IK 不好解
+4. 碰撞检查不通过
+
+处理：
+
+1. 点击 Sync current
+2. 把 XYZ step m 改成 0.005
+3. 只动一个方向
+4. 先只平移，不转姿态
+
+
+12.4 MoveL / MoveC 提示 no tcp_pose
+
+说明这个点位是旧版本保存的，里面只有关节角，没有末端位姿。
+
+处理：
+
+1. 移动到对应姿态
+2. 用新版 Save current 重新保存点位
+
+
+12.5 MoveL / MoveC cartesian fraction 太低
+
+说明 MoveIt 没法完整算出笛卡尔路径。
+
+处理：
+
+1. 缩短移动距离
+2. 降低姿态变化
+3. 避开奇异位形
+4. 先用 MoveJ 调整到更舒服的起始姿态
+
+
+12.6 RViz PlanningScene Warn
+
+如果 /get_planning_scene 服务存在，通常只是 RViz 插件初始场景请求慢。
+可以等几秒，或重启 RViz。
+
+
+13. 一句话总结
+============
+
+这个工具就是：
+
+多关节 jog + TCP IK jog + MoveJ/MoveL/MoveC + 点位库 + MoveIt Plan/Execute + 真实反馈校验
+
+它适合练习“关节示教、末端位姿示教、点位保存与复现”的完整工程流程。

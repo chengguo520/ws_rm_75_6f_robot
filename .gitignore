@@ -1,0 +1,32 @@
+# Catkin/ROS generated spaces
+/build/
+/devel/
+/install/
+/logs/
+/.catkin_tools/
+
+# Local editor and agent state
+/.vscode/
+/.agents/
+/.codex/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C/C++ build products
+*.o
+*.so
+*.a
+*.d
+
+# Runtime/log scratch files
+*.log
+*.bag
+*.active
+core
+
+# OS noise
+.DS_Store
+Thumbs.db

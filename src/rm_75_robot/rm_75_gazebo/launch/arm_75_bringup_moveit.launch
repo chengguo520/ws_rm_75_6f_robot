@@ -1,0 +1,43 @@
+<launch>
+  
+    <arg name="rvizconfig" default="$(find rm_75_gazebo)/config/rviz_gazebo.rviz"/>
+    <arg name="paused" default="false"/>
+    <arg name="gui" default="true"/>
+    <arg name="headless" default="false"/>
+    <arg name="debug" default="false"/>
+    <arg name="use_rgbd_camera" default="false"/>
+    <arg name="use_two_finger_gripper" default="false"/>
+    <arg name="rviz_software_rendering" default="false"/>
+    <arg name="world_name" default="worlds/empty.world"/>
+
+    <!--
+      The user's shell may export LIBGL_ALWAYS_SOFTWARE=1 for RViz compatibility.
+      Reset it here so Gazebo can use WSLg/D3D12/NVIDIA GPU rendering by default.
+      RViz can still opt back into software rendering through rviz_software_rendering.
+    -->
+    <env name="LIBGL_ALWAYS_SOFTWARE" value="0" />
+
+    <!-- Launch Gazebo  -->
+    <include file="$(find rm_75_gazebo)/launch/arm_world.launch">
+        <arg name="paused" value="$(arg paused)" />
+        <arg name="gui" value="$(arg gui)" />
+        <arg name="headless" value="$(arg headless)" />
+        <arg name="debug" value="$(arg debug)" />
+        <arg name="use_rgbd_camera" value="$(arg use_rgbd_camera)" />
+        <arg name="use_two_finger_gripper" value="$(arg use_two_finger_gripper)" />
+        <arg name="world_name" value="$(arg world_name)" />
+    </include>
+
+    <!-- ros_control arm launch file -->
+    <include file="$(find rm_75_gazebo)/launch/arm_gazebo_states.launch" />   
+
+    <!-- ros_control trajectory control dof arm launch file -->
+    <include file="$(find rm_75_gazebo)/launch/arm_75_trajectory_controller.launch" />
+
+    <!-- moveit launch file -->
+    <include file="$(find rm_75_moveit_config)/launch/moveit_planning_execution.launch" >
+        <arg name="rviz_gazebo_config" value="$(arg rvizconfig)" />
+        <arg name="rviz_software_rendering" value="$(arg rviz_software_rendering)" />
+    </include>
+
+</launch>

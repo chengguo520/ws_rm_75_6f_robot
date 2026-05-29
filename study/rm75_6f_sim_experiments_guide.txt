@@ -1,0 +1,420 @@
+RM75-6F 仿真实验代码说明
+日期：2026-05-27
+
+本说明对应三个逐步叠加的脚本：
+
+1. sim_01_scene_plan.py
+2. sim_02_vision_approach.py
+3. sim_03_gripper_pick.py
+
+脚本位置：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts
+
+
+1. 总体思路
+===========
+
+这三个实验不是一口气做完整抓取，而是逐层叠加：
+
+第 1 层：
+桌子 + 方块 + MoveIt planning scene + 轨迹规划
+
+第 2 层：
+相机识别彩色方块 + TF 转换 + 规划到接近点
+
+第 3 层：
+夹爪抓取框架 + attach object + MoveL 下探和抬起
+
+
+2. 一个关键概念
+===============
+
+Gazebo 里的物体和 MoveIt 里的碰撞物体不是一回事。
+
+Gazebo：
+负责物理仿真、显示、碰撞动力学。
+
+MoveIt planning scene：
+负责轨迹规划和碰撞检查。
+
+所以做仿真实验时经常要同时维护两份环境：
+
+1. Gazebo world 里有桌子/方块
+2. MoveIt planning scene 里也有桌子/方块
+
+如果只在 Gazebo 里加桌子，MoveIt 规划时可能穿过桌子。
+如果只在 MoveIt 里加桌子，RViz 能避障，但 Gazebo 世界里不一定看得到真实物体。
+
+
+3. 启动前提
+===========
+
+后续真正实验时，先启动 Gazebo + MoveIt：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+如果只是做代码阅读，不需要启动。
+
+
+4. 实验 01：桌子、方块、轨迹规划
+===============================
+
+脚本：
+
+sim_01_scene_plan.py
+
+功能：
+
+1. 在 MoveIt planning scene 里添加桌子和方块
+2. 可选：在 Gazebo 里也 spawn 简单 SDF 桌子和方块
+3. 规划机械臂到方块上方 12cm 的接近点
+4. 默认只规划，不执行
+
+运行：
+
+rosrun rm_75_demo sim_01_scene_plan.py
+
+同时尝试在 Gazebo 里生成物体：
+
+rosrun rm_75_demo sim_01_scene_plan.py --spawn-gazebo
+
+执行轨迹：
+
+rosrun rm_75_demo sim_01_scene_plan.py --execute
+
+学习重点：
+
+- PlanningSceneInterface
+- scene.add_box
+- Gazebo 模型和 MoveIt 碰撞物体的区别
+- pose target 规划
+
+
+5. 实验 02：视觉识别并接近物体
+=============================
+
+脚本：
+
+sim_02_vision_approach.py
+
+功能：
+
+1. 先准备演示桌子和蓝色方块
+2. 默认添加到 MoveIt planning scene，Gazebo 物体推荐由 world 文件提供
+3. 订阅 RGB 图像
+4. 按颜色识别红/蓝/绿方块
+5. 订阅 depth 图像
+6. 用 CameraInfo 把像素点反投影到相机坐标系
+7. 用 TF 转换到 base_link
+8. 在 MoveIt planning scene 里更新识别到的物体
+9. 规划到物体上方接近点
+
+默认话题：
+
+/camera/color/image_raw
+/camera/depth/image_raw
+/camera/color/camera_info
+
+运行：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue
+
+默认会自动准备 MoveIt 规划场景：
+
+- MoveIt planning scene 里添加 vision_table / vision_cube
+
+如果你已经自己准备了 Gazebo 物体，不想让脚本自动生成：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue --no-setup-scene
+
+如果不用 world 文件，而想让脚本临时往 Gazebo 里 spawn 物体：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue --spawn-gazebo
+
+如果相机话题不同：
+
+rosrun rm_75_demo sim_02_vision_approach.py \
+  --image-topic /your_camera/rgb/image_raw \
+  --depth-topic /your_camera/depth/image_raw \
+  --camera-info-topic /your_camera/rgb/camera_info \
+  --color red
+
+学习重点：
+
+- image topic
+- depth topic
+- CameraInfo 内参
+- 像素坐标到三维点
+- tf2 坐标变换
+- 感知结果生成 MoveIt 目标
+
+注意：
+
+当前代码假设有 RGB-D 深度相机。
+如果后面只加普通 RGB 相机，则需要另写基于桌面平面高度的定位逻辑。
+
+还要注意：
+
+MoveIt/RViz 里的蓝色方块只是 planning scene 碰撞物体。
+Gazebo 相机看不到纯 MoveIt 碰撞物体。
+所以用于视觉识别的方块必须真的存在于 Gazebo 世界里。
+
+
+5.1 Gazebo 里启用 RGB-D 相机
+----------------------------
+
+已经在 RM75-6F 的 Gazebo xacro 里加了一个可选 RGB-D 相机。
+
+改动文件：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/urdf/rm_75_6f_gazebo.urdf.xacro
+
+相机默认关闭。
+
+启动时这样打开：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch use_rgbd_camera:=true
+
+这个相机是固定俯视相机，不挂在机械臂末端。
+它挂在 dummy/root 坐标下，位置大约是：
+
+x = 0.55
+y = 0.00
+z = 0.85
+
+这样方便第一版视觉实验稳定看桌面区域。
+
+启动后检查话题：
+
+rostopic list | grep camera
+
+应该能看到类似：
+
+/camera/color/image_raw
+/camera/color/camera_info
+/camera/depth/image_raw
+/camera/depth/camera_info
+/camera/depth/points
+
+查看 RGB 图像：
+
+rqt_image_view /camera/color/image_raw
+
+查看深度图：
+
+rqt_image_view /camera/depth/image_raw
+
+确认有图像后，再运行：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue
+
+
+6. 实验 03：夹爪抓取框架
+=======================
+
+脚本：
+
+sim_03_gripper_pick.py
+
+功能：
+
+1. 在 MoveIt planning scene 中添加桌子和物体
+2. MoveJ 到物体上方预抓取点
+3. MoveL 下探到抓取点
+4. 可选发布夹爪开/合命令
+5. 执行模式下 attach object 到 link7
+6. MoveL 抬起
+7. detach object
+
+运行规划，不执行：
+
+rosrun rm_75_demo sim_03_gripper_pick.py
+
+真实执行仿真轨迹：
+
+rosrun rm_75_demo sim_03_gripper_pick.py --execute
+
+如果后面接入厂家夹爪话题：
+
+rosrun rm_75_demo sim_03_gripper_pick.py --execute --use-gripper-topic
+
+夹爪话题：
+
+/rm_driver/Gripper_Set
+
+消息：
+
+rm_75_msgs/Gripper_Set
+
+position = 1000 表示打开
+position = 1 表示闭合
+
+注意：
+
+当前 RM75-6F URDF 末端还没有真实夹爪模型。
+所以这个脚本更多是“抓取流程框架”：
+
+接近 -> 下探 -> 闭合 -> attach -> 抬起
+
+后面如果要做真正夹爪仿真，需要补：
+
+1. 夹爪 URDF/Xacro
+2. Gazebo 夹爪关节和碰撞模型
+3. ros_control gripper controller
+4. MoveIt end_effector group
+5. 夹爪开合控制接口
+
+
+7. 推荐学习顺序
+===============
+
+第一步：
+只跑 sim_01_scene_plan.py，看 RViz planning scene 中有没有桌子和方块。
+
+第二步：
+用 --spawn-gazebo，让 Gazebo 里也出现桌子和方块。
+
+第三步：
+确认 MoveIt 规划不会穿桌子。
+
+第四步：
+加一个 Gazebo RGB-D 相机，开始跑 sim_02_vision_approach.py。
+
+第五步：
+等识别稳定后，再看 sim_03_gripper_pick.py 的抓取流程。
+
+
+8. 安全提醒
+===========
+
+这些脚本默认是仿真学习脚本。
+
+如果连接实物机械臂，不要直接加 --execute。
+先确认：
+
+1. 当前运行的是 Gazebo controller 还是 real robot controller
+2. /rm_75/follow_joint_trajectory 指向的是仿真还是实物
+3. RViz 里的轨迹没有碰撞
+4. 速度足够低
+5. 急停可用
+
+
+9. 一句话总结
+=============
+
+sim_01 练环境和避障。
+sim_02 练视觉和坐标变换。
+sim_03 练抓取动作流程。
+
+这三步连起来，就是：
+
+环境建模 -> 目标识别 -> 轨迹规划 -> 接近/抓取
+
+
+10. 使用 world 文件固定桌子和方块
+================================
+
+已经新增 Gazebo world：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/worlds/rm75_table_cube.world
+
+里面包含：
+
+- ground_plane
+- sun
+- vision_table
+- vision_cube
+
+启动带桌子和蓝色方块的 Gazebo + MoveIt：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch \
+  world_name:=$(rospack find rm_75_gazebo)/worlds/rm75_table_cube.world \
+  use_rgbd_camera:=true
+
+其中：
+
+world_name:
+
+让 Gazebo 加载带桌子和方块的 world。
+
+use_rgbd_camera:
+
+让机器人 URDF 里启用固定 RGB-D 相机。
+
+然后检查相机：
+
+rostopic list | grep camera
+
+查看 RGB 图像：
+
+rqt_image_view /camera/color/image_raw
+
+运行视觉接近脚本：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue
+
+注意：
+
+world 文件负责 Gazebo 里“看得见”的桌子和方块。
+sim_02_vision_approach.py 在运行时会把桌子和方块加到 MoveIt planning scene，
+这样脚本规划接近动作时才知道避障。
+平时只看 Gazebo 画面，不需要 RViz 提前显示这些物体。
+
+如果不用 world 文件，而想让脚本临时往 Gazebo 里 spawn 物体：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue --spawn-gazebo
+
+
+11. 可选安装两指夹爪模型
+=======================
+
+官方两指夹爪 URDF 原始路径：
+
+/home/ros/机械臂/RM-75系列机械臂/（4）ROS资料/RM75系列URDF文件/两指夹爪URDF
+
+已经把官方 STL mesh 复制到：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/meshes
+
+新增 xacro：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/urdf/two_finger_gripper_fixed.xacro
+
+当前版本是固定张开的夹爪模型：
+
+- 能显示在 Gazebo/RViz 的机器人模型上
+- 挂在 link7 后面
+- 不需要额外 gripper joint_states
+- 不需要 gripper controller
+- 还不能开合
+
+启动带夹爪、桌子、方块、RGB-D 相机的仿真：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch \
+  world_name:=$(rospack find rm_75_gazebo)/worlds/rm75_table_cube.world \
+  use_rgbd_camera:=true \
+  use_two_finger_gripper:=true
+
+如果夹爪方向不合适，调整这里：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_6f_description/urdf/rm_75_6f_gazebo.urdf.xacro
+
+搜索：
+
+two_finger_gripper_fixed
+
+当前挂接参数：
+
+xyz="-0.010 0 0.045"
+rpy="0 -1.5708 0"
+
+下一步如果要做可开合夹爪，需要继续补：
+
+1. 把 fixed joints 改回 revolute / mimic joints
+2. 给 Gazebo 加 transmission
+3. 配 gripper controller
+4. MoveIt SRDF 里加 end_effector / gripper group
+5. 在抓取脚本里发布开合命令或控制 gripper action

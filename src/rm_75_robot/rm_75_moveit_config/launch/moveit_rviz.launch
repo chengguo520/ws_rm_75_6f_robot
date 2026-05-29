@@ -1,0 +1,19 @@
+<launch>
+
+  <arg name="debug" default="false" />
+  <arg unless="$(arg debug)" name="launch_prefix" value="" />
+  <arg     if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args" />
+  <arg name="software_rendering" default="false" />
+
+  <arg name="rviz_config" default="" />
+  <arg     if="$(eval rviz_config=='')" name="command_args" value="" />
+  <arg unless="$(eval rviz_config=='')" name="command_args" value="-d $(arg rviz_config)" />
+
+  <node name="$(anon rviz)" launch-prefix="$(arg launch_prefix)" pkg="rviz" type="rviz" respawn="false"
+        args="$(arg command_args)" output="screen">
+    <!-- WSLg + D3D12 can make RViz mesh rendering disappear on some machines.
+         Keep this switch local to RViz so Gazebo can still use the GPU. -->
+    <env if="$(arg software_rendering)" name="LIBGL_ALWAYS_SOFTWARE" value="1" />
+  </node>
+
+</launch>

@@ -1,0 +1,33 @@
+1. launch include 关系
+2. yaml 参数加载
+3. topic/action/service 区别
+4. robot_description / URDF / SRDF
+5. controller 配置如何对应 action
+6. /joint_states -> robot_state_publisher -> /tf -> RViz
+7. MoveIt plan 和 execute 分离
+8. 用 Python 写小工具节点
+9. rosbag 记录和复现问题
+10. 日志与 rqt_graph 排错
+
+subscribe(...)
+advertise(...)
+param(...)
+send(...)
+recv(...)
+
+rosnode list
+rostopic list
+rostopic info /xxx
+rostopic echo /xxx
+rosparam get /xxx
+rosservice list
+rqt_graph
+tf view_frames
+
+topic
+service
+action
+param
+tf
+launch include
+yaml config

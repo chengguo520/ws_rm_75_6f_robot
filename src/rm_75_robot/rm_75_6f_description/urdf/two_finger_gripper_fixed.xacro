@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Fixed visual/collision version of the official jawasm1 two-finger gripper.
+    The official URDF has its own base_link and revolute joints. For the first
+    simulation step we prefix the names and make the fingers fixed, so no extra
+    gripper controller or joint_state publisher is required.
+  -->
+  <xacro:macro name="two_finger_gripper_fixed" params="prefix parent xyz:='0 0 0' rpy:='0 -1.5708 0'">
+    <link name="${prefix}base_link">
+      <inertial>
+        <origin xyz="0.00339303654278191 -2.1205433560656E-05 -0.0099185365078758" rpy="0 0 0" />
+        <mass value="0.105853592307918" />
+        <inertia ixx="3.93795927851199E-05" ixy="-8.7395226509728E-08" ixz="5.91928672040786E-07" iyy="0.000106376720416166" iyz="-1.82858764303774E-10" izz="0.000125852616063213" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_base_link.STL" />
+        </geometry>
+        <material name="${prefix}gripper_green">
+          <color rgba="0.05 0.65 0.18 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_base_link.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}mount_joint" type="fixed">
+      <origin xyz="${xyz}" rpy="${rpy}" />
+      <parent link="${parent}" />
+      <child link="${prefix}base_link" />
+    </joint>
+
+    <link name="${prefix}link1">
+      <inertial>
+        <origin xyz="0.0164149658242926 9.75754915755189E-09 0.00898193900447147" rpy="0 0 0" />
+        <mass value="0.00647716099397792" />
+        <inertia ixx="2.95068972140683E-07" ixy="8.63208170411155E-13" ixz="-1.92008628754607E-09" iyy="1.69979619476872E-06" iyz="-1.99232397395103E-13" izz="1.45016449434989E-06" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link1.STL" />
+        </geometry>
+        <material name="${prefix}gripper_green" />
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link1.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}link1_joint" type="fixed">
+      <origin xyz="0.036 -0.04 -0.019" rpy="-3.0158E-16 -7.1586E-16 -0.30719" />
+      <parent link="${prefix}base_link" />
+      <child link="${prefix}link1" />
+    </joint>
+
+    <link name="${prefix}link11">
+      <inertial>
+        <origin xyz="0.011366555972498 0.0118642725662323 0.0060000073930068" rpy="0 0 0" />
+        <mass value="0.0127543420299361" />
+        <inertia ixx="5.68538478020233E-07" ixy="-2.68012262729007E-07" ixz="9.34125984931838E-13" iyy="1.45145776457487E-06" iyz="9.34355360561326E-13" izz="1.50564598220449E-06" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link11.STL" />
+        </geometry>
+        <material name="${prefix}gripper_green" />
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link11.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}link11_joint" type="fixed">
+      <origin xyz="0.042 0 0.003" rpy="5.0393E-16 5.6225E-16 0.30719" />
+      <parent link="${prefix}link1" />
+      <child link="${prefix}link11" />
+    </joint>
+
+    <link name="${prefix}link2">
+      <inertial>
+        <origin xyz="0.0164149658242926 9.75754915755189E-09 0.00898193900447147" rpy="0 0 0" />
+        <mass value="0.00647716099397793" />
+        <inertia ixx="2.95068972140683E-07" ixy="8.63208169650113E-13" ixz="-1.92008628755341E-09" iyy="1.69979619476872E-06" iyz="-1.99232397320157E-13" izz="1.45016449434989E-06" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link2.STL" />
+        </geometry>
+        <material name="${prefix}gripper_green" />
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link2.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}link2_joint" type="fixed">
+      <origin xyz="0.036 0.04 -0.019" rpy="-2.6397E-16 3.7199E-16 0.30719" />
+      <parent link="${prefix}base_link" />
+      <child link="${prefix}link2" />
+    </joint>
+
+    <link name="${prefix}link22">
+      <inertial>
+        <origin xyz="-0.011366555972498 0.0118642725662323 -0.0060000073930068" rpy="0 0 0" />
+        <mass value="0.0127543420299362" />
+        <inertia ixx="5.68538478020238E-07" ixy="2.6801226272901E-07" ixz="9.34125986250171E-13" iyy="1.45145776457489E-06" iyz="-9.34355361631596E-13" izz="1.5056459822045E-06" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link22.STL" />
+        </geometry>
+        <material name="${prefix}gripper_green" />
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://rm_75_6f_description/meshes/gripper_Link22.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}link22_joint" type="fixed">
+      <origin xyz="0.042 0 0.015" rpy="-3.641E-16 2.4584E-16 2.8344" />
+      <parent link="${prefix}link2" />
+      <child link="${prefix}link22" />
+    </joint>
+
+    <!--
+      Gripper TCP frame.
+      X axis: forward through the middle of the fingers.
+      Y axis: finger opening/closing direction.
+      Z axis: gripper thickness direction.
+      The xyz value is estimated from the fixed-open official meshes, placing
+      the TCP near the center between the two fingertip pads.
+    -->
+    <link name="${prefix}tcp_link" />
+    <joint name="${prefix}tcp_joint" type="fixed">
+      <origin xyz="0.096 0 -0.010" rpy="0 0 0" />
+      <parent link="${prefix}base_link" />
+      <child link="${prefix}tcp_link" />
+    </joint>
+
+    <gazebo reference="${prefix}base_link">
+      <material>Gazebo/Green</material>
+    </gazebo>
+    <gazebo reference="${prefix}link1">
+      <material>Gazebo/Green</material>
+    </gazebo>
+    <gazebo reference="${prefix}link11">
+      <material>Gazebo/Green</material>
+    </gazebo>
+    <gazebo reference="${prefix}link2">
+      <material>Gazebo/Green</material>
+    </gazebo>
+    <gazebo reference="${prefix}link22">
+      <material>Gazebo/Green</material>
+    </gazebo>
+
+  </xacro:macro>
+</robot>

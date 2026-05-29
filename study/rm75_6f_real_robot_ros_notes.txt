@@ -1,0 +1,413 @@
+RM75-6F 实物机械臂 ROS 连接与 MoveIt 控制笔记
+日期：2026-05-26
+工作区：/home/ros/ws_rm_75_6f_robot
+
+1. 这条链路现在已经跑通了什么
+--------------------------------
+实物连接已经验证：
+- 机械臂 IP：192.168.1.18
+- 机械臂 TCP 端口：8080
+- /joint_states 可以收到 7 个关节角反馈
+- /rm_75/follow_joint_trajectory action 已经出现
+- MoveIt 可以规划并执行真实机械臂动作
+- RViz 的 Fixed Frame 应设为 base_link
+
+核心数据流：
+
+MoveIt/RViz
+  -> /rm_75/follow_joint_trajectory action
+  -> rm_75_control
+  -> /rm_driver/JointPos
+  -> rm_75_driver
+  -> TCP socket: 192.168.1.18:8080
+  -> 实物机械臂
+  -> /joint_states 反馈
+  -> robot_state_publisher 发布 /tf
+  -> RViz 显示当前姿态
+
+
+2. 启动前检查
+------------
+
+机械臂侧：
+
+- 机械臂上电，等待初始化完成。
+- 急停按钮处于释放状态，并且手边随时能按。
+- 机械臂处于以太网通信模式。
+- 网线已经接好。
+- 周围无人员、线缆、桌面、工具等干涉风险。
+
+电脑侧：
+
+进入工作区：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+
+检查网络：
+
+ping 192.168.1.18
+
+正常现象：
+
+- 能收到 192.168.1.18 的回复
+- 丢包 0%
+
+如果 ping 不通，先不要启动 ROS 控制，优先检查：
+
+- 网线
+- 机械臂 IP
+- 上位机 IP/路由
+- 机械臂是否处于以太网通信模式
+
+
+3. 推荐启动方式：按官方第七章的实物链路
+--------------------------------------
+
+终端 1：启动实物轨迹控制器 rm_75_control
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_control rm_75_control.launch
+
+这个节点负责：
+
+- 提供 /rm_75/follow_joint_trajectory action server
+- 接收 MoveIt 规划出来的 JointTrajectory
+- 插值后持续发布 /rm_driver/JointPos
+
+
+终端 2：启动驱动、MoveIt、RViz
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_bringup rm_robot.launch arm_ip:=192.168.1.18
+
+这个 launch 会启动：
+
+- rm_75_driver：连接真实机械臂
+- demo_realrobot.launch：启动 MoveIt 后端和 RViz
+- robot_state_publisher：把 /joint_states 转成 /tf
+
+
+4. 启动后检查
+------------
+查看节点：
+rosnode list
+正常应看到类似：
+
+/move_group
+/rm_75_control
+/robot_driver
+/robot_state_publisher
+/rviz_xxx
+/rosout
+
+查看实物关节反馈：
+
+rostopic echo -n1 /joint_states
+
+正常应看到：
+
+- name: joint1 到 joint7
+- position: 7 个关节角，单位是 rad
+
+查看 MoveIt 执行动作接口：
+
+rostopic list | grep follow_joint_trajectory
+
+正常应看到：
+
+/rm_75/follow_joint_trajectory/goal
+/rm_75/follow_joint_trajectory/result
+/rm_75/follow_joint_trajectory/status
+/rm_75/follow_joint_trajectory/feedback
+/rm_75/follow_joint_trajectory/cancel
+
+查看 TF：
+
+rostopic echo -n1 /tf
+
+正常应看到：
+
+base_link -> link1 -> link2 -> ... -> link7
+
+RViz 中：
+
+- Global Options / Fixed Frame 设置为 base_link
+- MotionPlanning 状态应为 OK
+- 白色当前机械臂应和实物姿态一致
+
+
+5. MoveIt 为什么能找到实物 action
+--------------------------------
+
+实物 MoveIt controller 配置文件：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_moveit_config/config/controllers.yaml
+
+关键内容：
+
+controller_list:
+ - name: rm_75
+   action_ns: follow_joint_trajectory
+   type: FollowJointTrajectory
+
+所以 MoveIt 实际找的是：
+
+/rm_75/follow_joint_trajectory
+
+这个 action server 由 rm_75_control 提供。
+
+注意：
+
+- Gazebo 用的是 controllers_gazebo.yaml
+- 实物用的是 controllers.yaml
+- 当前 launch 已经改成通过 controller_config 参数切换
+- demo_realrobot.launch 默认使用 controllers.yaml
+
+
+6. 如何发送角度命令：推荐用 MoveIt 脚本
+-------------------------------------
+
+注意单位：
+
+- ROS/MoveIt 里关节角通常是 rad
+- 0.1 rad 约等于 5.73 度
+- 20 度约等于 0.349 rad
+
+
+6.1 后三个腕部关节一起小幅运动
+
+脚本：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/real_wrist_small_step.py
+
+只规划，不执行：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05
+
+执行：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05 --execute
+
+含义：
+
+- joint5、joint6、joint7 各在当前角度基础上增加 0.03 rad
+- 0.03 rad 约等于 1.7 度
+- velocity 0.05 表示速度缩放 5%
+- acceleration 0.05 表示加速度缩放 5%
+
+安全限制：
+
+- 该脚本最大只允许 --delta 0.10 rad
+- 超过会直接拒绝运行
+
+
+6.2 单独移动某一个关节
+
+脚本：
+
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/real_single_joint_step.py
+
+只规划 joint6 +20 度，不执行：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05
+
+执行 joint6 +20 度：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05 --execute
+
+反方向回来：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees -20 --velocity 0.05 --acceleration 0.05 --execute
+
+含义：
+
+- --joint joint6：只动第 6 关节
+- --degrees 20：在当前角度基础上增加 20 度
+- --velocity 0.05：速度 5%
+- --acceleration 0.05：加速度 5%
+- --execute：真正执行；没有这个参数时只规划
+
+安全限制：
+
+- 单次最多允许 20 度
+- 速度和加速度最大允许 0.20
+
+
+7. 直接发布 /rm_driver/JointPos 是否可以
+-------------------------------------
+
+可以，但不推荐作为初学实物调试的第一选择。
+
+/rm_driver/JointPos 是 rm_75_driver 订阅的角度透传话题，消息类型：
+
+rm_75_msgs/JointPos
+
+大概形式：
+
+rostopic pub /rm_driver/JointPos rm_75_msgs/JointPos "{joint: [j1, j2, j3, j4, j5, j6, j7]}"
+
+注意：
+
+- joint 数组单位是 rad
+- 这是更底层的角度透传
+- 不经过 MoveIt 的完整规划和碰撞检查
+- 官方说明中提到该指令与当前角度不应超过约 10 度
+
+学习阶段建议优先使用 MoveIt 脚本或 RViz MoveIt 面板。
+
+
+8. 如何用 RViz / MoveIt 手动 Plan 和 Execute
+------------------------------------------
+
+RViz 中建议先这样设置：
+
+- Planning Group: arm
+- Start State: <current>
+- Velocity Scaling: 0.05
+- Accel. Scaling: 0.05
+
+推荐流程：
+
+1. 不要一开始点 Plan & Execute。
+2. 先在 Joints 标签页里小幅修改单个关节。
+3. 点 Plan，只看规划。
+4. 确认橙色目标和轨迹合理，没有大幅绕圈、翻腕、碰撞风险。
+5. 再点 Execute。
+
+刚开始不要做：
+
+- 随机目标 random target
+- 大幅拖拽末端姿态球
+- 高速度执行
+- 不了解目标姿态时直接 Plan & Execute
+
+原因：
+
+- 拖末端走的是 IK，可能多个关节同时大幅调整。
+- Joints 面板单关节小角度更可控。
+
+
+9. 常见现象解释
+--------------
+
+9.1 RViz Global Status: Error
+
+如果 MotionPlanning 是 OK，但 Global Status 是 Error，优先看：
+
+Global Options / Fixed Frame
+
+实物 6F 当前应设置为：
+
+base_link
+
+不要用 dummy。
+
+
+9.2 bottom_link warning
+
+可能看到：
+
+Link 'bottom_link' is not known to URDF. Cannot disable/enable collisons.
+
+当前实物 MoveIt 使用的是 6F URDF，Gazebo 稳定用的 bottom_link 不一定在实物 URDF 里。
+这个警告目前不影响实物 joint planning 和 execution。
+
+
+9.3 KDL root inertia warning
+
+可能看到：
+
+The root link base_link has an inertia specified in the URDF...
+
+这是 KDL 对根 link 惯量的常见警告。
+当前不影响今天的实物关节运动测试。
+
+
+10. 关闭流程
+------------
+
+最干净的关闭方式：
+
+1. 先不要再发 Execute。
+2. 关闭 RViz 窗口，或者在启动 RViz 的终端 Ctrl+C。
+3. 关闭 MoveIt：
+
+rosnode kill /move_group
+
+4. 关闭控制器：
+
+rosnode kill /rm_75_control
+
+5. 关闭驱动：
+
+rosnode kill /robot_driver
+
+6. 关闭 robot_state_publisher：
+
+rosnode kill /robot_state_publisher
+
+7. 如果 rosnode list 只剩 /rosout，可以停止 roscore。
+
+如果节点列表残留但实际进程已退出，可以清理 ROS master 缓存：
+
+rosnode cleanup
+
+检查剩余节点：
+
+rosnode list
+
+检查系统中是否还有相关进程：
+
+ps -eo pid,ppid,cmd | grep -E 'roscore|rosmaster|roslaunch|rm_driver|rm_control|move_group|robot_state_publisher|rviz' | grep -v grep
+
+没有输出，说明关干净了。
+
+长时间离开时：
+
+- 不要让 rm_driver / rm_75_control / move_group 持续运行
+- 保持急停可用
+- 按实验室或设备规范给机械臂下电
+
+
+11. 今天验证过的关键命令
+----------------------
+
+网络：
+
+ping 192.168.1.18
+
+状态：
+
+rostopic echo -n1 /joint_states
+
+动作接口：
+
+rostopic list | grep follow_joint_trajectory
+
+后 3 关节小幅动作：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.1 --velocity 0.05 --acceleration 0.05 --execute
+
+joint6 单关节 20 度动作：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05 --execute
+
+joint6 反方向回来：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees -20 --velocity 0.05 --acceleration 0.05 --execute
+
+
+12. 一句话总结
+-------------
+
+实物控制不是 Gazebo 的 /arm/arm_joint_controller。
+实物控制走的是：
+
+MoveIt -> /rm_75/follow_joint_trajectory -> rm_75_control -> /rm_driver/JointPos -> rm_75_driver -> 192.168.1.18:8080 -> 真实 RM75-6F
+
+RViz 只是界面。
+Plan 只是规划。
+Execute 才会真正让机械臂运动。

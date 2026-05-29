@@ -1,0 +1,399 @@
+RM75-6F 点位保存与复现工具教学文档
+日期：2026-05-27
+脚本：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/real_waypoint_tool.py
+
+
+1. 这个工具解决什么问题
+======================
+
+之前我们已经能做到：
+
+- 用 RViz / MoveIt 控制真实机械臂
+- 用 Python 脚本控制单个关节
+- 用多关节面板调目标角度
+
+接下来更像真实机器人应用的一步是：
+
+1. 把当前机械臂姿态保存成“点位”
+2. 后续选择某个点位
+3. 先用 MoveIt 规划
+4. 确认轨迹合理
+5. 慢速执行
+6. 执行后检查真实反馈是否到位
+
+这个脚本就是一个小型“点位库 + 复现工具”。
+
+
+2. 启动前提
+==========
+
+实物链路必须已经启动。
+
+终端 1：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_control rm_75_control.launch
+
+终端 2：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_bringup rm_robot.launch arm_ip:=192.168.1.18
+
+检查：
+
+rosnode list
+
+应该至少有：
+
+/rm_75_control
+/rm_driver
+/move_group
+/robot_state_publisher
+
+检查真实反馈：
+
+rostopic echo -n1 /joint_states
+
+检查 MoveIt action：
+
+rostopic list | grep /rm_75/follow_joint_trajectory
+
+
+3. 默认点位文件
+==============
+
+默认保存到：
+
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoints.yaml
+
+可以用 --store 改成别的文件：
+
+rosrun rm_75_demo real_waypoint_tool.py --store /tmp/test.yaml list
+
+或者：
+
+rosrun rm_75_demo real_waypoint_tool.py list --store /tmp/test.yaml
+
+
+4. 常用命令
+==========
+
+4.1 查看当前真实关节角
+
+rosrun rm_75_demo real_waypoint_tool.py current
+
+输出：
+
+- 当前关节角 rad
+- 当前关节角 deg
+
+
+4.2 保存当前姿态为点位
+
+rosrun rm_75_demo real_waypoint_tool.py save p1 --note "first safe point"
+
+如果点位已经存在，需要强制覆盖：
+
+rosrun rm_75_demo real_waypoint_tool.py save p1 --force --note "overwrite p1"
+
+建议命名：
+
+- safe_home
+- pre_grasp
+- place_left
+- test_j5
+
+
+4.3 列出点位
+
+rosrun rm_75_demo real_waypoint_tool.py list
+
+
+4.4 查看某个点位
+
+rosrun rm_75_demo real_waypoint_tool.py show p1
+
+
+4.5 删除某个点位
+
+rosrun rm_75_demo real_waypoint_tool.py delete p1
+
+
+4.6 只规划到某个点位，不执行
+
+rosrun rm_75_demo real_waypoint_tool.py plan p1 --velocity 0.05 --acceleration 0.05
+
+这个命令会：
+
+1. 读取当前真实机械臂角度
+2. 读取点位 p1
+3. 打印每个关节的 current / target / delta
+4. 做安全校验
+5. 调用 MoveIt plan
+6. 不执行
+
+
+4.7 规划并执行到某个点位
+
+rosrun rm_75_demo real_waypoint_tool.py go p1 --velocity 0.05 --acceleration 0.05
+
+默认会要求手动确认：
+
+Type 'yes' to execute:
+
+输入 yes 才会真正执行。
+
+如果你已经确认流程稳定，可以跳过确认：
+
+rosrun rm_75_demo real_waypoint_tool.py go p1 --velocity 0.05 --acceleration 0.05 --yes
+
+学习阶段不建议滥用 --yes。
+
+
+5. 安全参数
+==========
+
+5.1 速度和加速度
+
+默认：
+
+--velocity 0.05
+--acceleration 0.05
+
+最大只允许：
+
+0.20
+
+也就是 20%。
+
+
+5.2 单次最大关节变化
+
+默认：
+
+--max-delta-deg 180
+
+意思是：当前姿态到目标点位，每个关节变化不能超过 180 度。
+
+保存点位复现通常会跨越比较大的关节角变化，所以默认值放得比较宽。
+如果你想做保守调试，可以手动收紧这个值。
+
+如果超过，会拒绝执行。
+
+比如：
+
+rosrun rm_75_demo real_waypoint_tool.py plan p1 --max-delta-deg 20
+
+这表示每个关节最多只允许变化 20 度。
+
+
+5.3 执行后反馈误差
+
+默认：
+
+--verify-tolerance-deg 1.0
+
+执行后脚本会重新读取 /joint_states，并比较目标角和真实反馈角。
+
+如果最大误差超过 1 度，会提示：
+
+WARNING: robot feedback did not reach target
+
+这很重要，因为 rm_75_control 的 action 成功不等于真实机械臂一定到位。
+
+
+6. YAML 点位文件结构
+===================
+
+文件大概长这样：
+
+version: 1
+joint_names:
+- joint1
+- joint2
+- joint3
+- joint4
+- joint5
+- joint6
+- joint7
+waypoints:
+  p1:
+    created_at: '2026-05-27T13:30:00'
+    note: first safe point
+    positions:
+      joint1: 1.0903
+      joint2: -0.9674
+      joint3: -0.7869
+      joint4: 1.3997
+      joint5: 2.6819
+      joint6: 0.5635
+      joint7: -0.4954
+
+positions 里的单位是 rad。
+
+
+7. 代码结构
+==========
+
+脚本分成 8 层：
+
+1. 工程配置层
+
+- GROUP_NAME
+- JOINT_NAMES
+- 默认点位文件
+- 默认速度/加速度
+- 安全阈值
+
+2. 通用格式化与 MoveIt 兼容层
+
+- rad/deg 转换
+- MoveIt plan 返回值兼容
+- MoveIt error code 转文字
+
+3. 点位库读写层
+
+- load_store()
+- save_store()
+- positions_to_dict()
+- positions_from_waypoint()
+
+4. ROS / MoveIt 初始化与状态读取层
+
+- init_moveit_node()
+- wait_for_joint_states()
+- current_joints()
+- load_joint_limits_from_robot_description()
+
+5. 安全校验层
+
+- validate_target()
+- print_delta_table()
+- verify_feedback()
+
+6. MoveIt 规划与执行层
+
+- plan_to_target()
+- confirm_execution()
+- execute_plan()
+
+7. 子命令实现层
+
+- list
+- show
+- delete
+- current
+- save
+- plan
+- go
+
+8. 命令行入口层
+
+- argparse
+- main()
+
+
+8. 推荐学习顺序
+==============
+
+第一步：只看点位文件管理
+
+rosrun rm_75_demo real_waypoint_tool.py list
+rosrun rm_75_demo real_waypoint_tool.py show p1
+
+第二步：只读取当前角度
+
+rosrun rm_75_demo real_waypoint_tool.py current
+
+第三步：保存一个安全点位
+
+rosrun rm_75_demo real_waypoint_tool.py save safe_home --note "safe start pose"
+
+第四步：移动机械臂一点点
+
+可以用 RViz 或 real_single_joint_step.py 小幅移动。
+
+第五步：只规划回 safe_home
+
+rosrun rm_75_demo real_waypoint_tool.py plan safe_home --velocity 0.05 --acceleration 0.05
+
+第六步：执行回 safe_home
+
+rosrun rm_75_demo real_waypoint_tool.py go safe_home --velocity 0.05 --acceleration 0.05
+
+
+9. 排错
+======
+
+9.1 提示 No /joint_states received
+
+说明 rm_driver 没有正常发布真实反馈。
+
+检查：
+
+rosnode list
+rostopic echo -n1 /joint_states
+
+
+9.2 提示 /joint_states missing joints
+
+说明反馈里没有 joint1~joint7 的完整数据。
+
+可能是模型/驱动不匹配。
+
+
+9.3 提示 Target validation failed
+
+说明目标点位不安全，可能原因：
+
+- 当前姿态离目标太远
+- 超过 --max-delta-deg
+- 目标角超过 URDF 关节上下限
+
+
+9.4 Plan success false
+
+说明 MoveIt 没规划出来。
+
+检查：
+
+- 当前姿态是否在边界
+- 点位是否过远
+- 是否碰撞
+- RViz 里是否能手动 Plan
+
+
+9.5 MoveIt execute result True，但反馈没到位
+
+脚本会额外检查 /joint_states。
+
+如果提示反馈误差大，继续查：
+
+rostopic echo /rm_driver/JointPos
+grep -R "JointPos failed\\|Real Arm Trajectory Planning Error" -n ~/.ros/log/latest
+
+可能原因：
+
+- 机械臂控制器拒绝
+- 关节限位/保护
+- 机械臂未使能
+- 急停/保护状态
+- 控制模式不对
+
+
+10. 一句话总结
+==============
+
+这个工具把“当前真实姿态”保存为 YAML 点位，再通过 MoveIt 规划回去。
+
+它练的是机器人实习里很重要的工程能力：
+
+- 点位管理
+- MoveIt 编程
+- action 执行
+- joint_states 反馈校验
+- 安全限制
+- 排错流程
