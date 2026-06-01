@@ -1,0 +1,14 @@
+分支：feature/gripper-open-close
+
+目标：
+在不影响 master 稳定版本的前提下，实验开合夹爪自由度。
+
+计划：
+1. 先检查当前固定夹爪的 xacro、controller、launch 配置。
+2. 增加夹爪关节自由度。
+3. 增加夹爪控制器。
+4. 验证 Gazebo 中机械臂不会掉进地面。
+5. 验证 MoveIt 与视觉抓取脚本仍能运行。
+
+注意：
+如果实验失败，可以切回 master，稳定版本不受影响。
