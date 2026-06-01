@@ -1,0 +1,822 @@
+Git 与 GitHub 学习笔记：用版本管理保护 RM75-6F 机械臂项目
+================================================================
+
+日期：2026-05-31
+工作区：/home/ros/ws_rm_75_6f_robot
+
+
+一、为什么现在必须学 Git
+--------------------------------------------------------------------------------
+
+你现在的机械臂项目已经不再是一个简单 demo，而是包含：
+
+  1. RM75-6F URDF/xacro 模型。
+  2. Gazebo 仿真。
+  3. MoveIt 配置。
+  4. RGB-D 相机。
+  5. 桌子、方块、夹爪、TCP。
+  6. 多个 Python 实验脚本。
+  7. 真机连接笔记和学习资料。
+
+这种项目非常容易出现下面的问题：
+
+  - 今天改了 PID，机械臂掉进地面。
+  - 明天改了夹爪关节，Gazebo 控制器加载失败。
+  - 后天改了 launch，MoveIt 又找不到 action。
+  - 你想回到“昨天能跑的版本”，但不知道哪些文件被改过。
+
+Git 的核心价值就是：
+
+  每当系统处在一个“能跑、能解释、能继续学习”的状态时，就保存一个快照。
+
+以后改坏了，可以：
+
+  - 看清楚改了哪些文件。
+  - 撤销未提交改动。
+  - 回到某个稳定提交。
+  - 在分支上做实验，不污染稳定主线。
+
+
+二、Git 和 GitHub 的区别
+--------------------------------------------------------------------------------
+
+Git：
+
+  本地版本管理工具。
+  它运行在你的电脑上。
+  没有网络也能用。
+
+GitHub：
+
+  云端代码托管平台。
+  它可以保存你的 Git 仓库副本。
+  方便备份、换电脑、协作、展示项目。
+
+一句话：
+
+  Git 是工具。
+  GitHub 是远程仓库平台。
+
+关系是：
+
+  本地工作区
+    -> git add
+    -> git commit
+    -> 本地 Git 仓库
+    -> git push
+    -> GitHub 远程仓库
+
+
+三、Git 的三个区域
+--------------------------------------------------------------------------------
+
+Git 最重要的是理解三个区域：
+
+  1. 工作区 working tree
+
+     你正在编辑的真实文件。
+     例如：
+
+       src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+       study/rm75_6f_sim_world_camera_gripper_pipeline.txt
+
+  2. 暂存区 staging area
+
+     你准备放进下一次 commit 的改动。
+     使用 git add 把文件放进暂存区。
+
+  3. 版本库 repository
+
+     已经 commit 保存下来的历史快照。
+
+流程是：
+
+  修改文件
+    -> git status 查看状态
+    -> git diff 看改了什么
+    -> git add 选择要保存的改动
+    -> git commit 创建快照
+
+
+四、当前项目的 Git 状态
+--------------------------------------------------------------------------------
+
+当前工作区已经初始化 Git：
+
+  /home/ros/ws_rm_75_6f_robot
+
+当前稳定基线提交是：
+
+  ee562b0 chore: baseline RM75-6F fixed-gripper simulation
+
+这个提交代表：
+
+  - RM75-6F 工作区源代码已纳入 Git。
+  - build/devel/logs 没有纳入 Git。
+  - 当前夹爪是 fixed model，不包含可动夹爪自由度。
+  - 当前是一个适合继续学习的稳定基线。
+
+查看当前状态：
+
+  cd /home/ros/ws_rm_75_6f_robot
+  git status
+
+干净状态应该类似：
+
+  On branch master
+  nothing to commit, working tree clean
+
+
+五、.gitignore：哪些文件不应该提交
+--------------------------------------------------------------------------------
+
+ROS/catkin 工作区里有很多自动生成文件，不应该提交。
+
+当前 .gitignore 主要忽略：
+
+  /build/
+  /devel/
+  /install/
+  /logs/
+  /.catkin_tools/
+  __pycache__/
+  *.pyc
+  *.log
+  *.bag
+
+原因：
+
+  build/
+    编译中间产物，可以重新生成。
+
+  devel/
+    catkin 生成的环境文件，可以重新生成。
+
+  logs/
+    构建/运行日志，不是源代码。
+
+  __pycache__/
+    Python 缓存文件，不需要版本管理。
+
+  *.bag
+    rosbag 通常很大，不适合直接进普通 Git 仓库。
+
+应该提交的是：
+
+  src/
+    ROS 包源码、URDF、launch、yaml、脚本。
+
+  study/
+    学习笔记、流程记录、排错总结。
+
+  .gitignore
+    Git 忽略规则本身。
+
+
+六、最常用的 6 个命令
+--------------------------------------------------------------------------------
+
+1. 查看状态：
+
+  git status
+
+它回答：
+
+  - 哪些文件改了？
+  - 哪些文件还没被 Git 跟踪？
+  - 哪些文件已经 add，准备 commit？
+  - 当前工作区是否干净？
+
+
+2. 查看改动内容：
+
+  git diff
+
+它显示工作区里还没有 add 的改动。
+
+符号含义：
+
+  + 新增的行
+  - 删除的行
+
+
+3. 加入暂存区：
+
+  git add 文件名
+
+例如：
+
+  git add src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+
+或者添加多个目录：
+
+  git add src study
+
+注意：
+
+  git add 不是提交。
+  它只是说：“这些改动我准备下次提交。”
+
+
+4. 提交快照：
+
+  git commit -m "提交说明"
+
+例如：
+
+  git commit -m "fix: restore fixed gripper simulation"
+
+提交说明建议格式：
+
+  feat: 新功能
+  fix: 修 bug
+  docs: 文档
+  chore: 工程维护
+  test: 测试
+
+例子：
+
+  feat: add RGB-D cube detection demo
+  fix: remove unstable gripper controllers
+  docs: update RM75-6F simulation notes
+  chore: baseline RM75-6F fixed-gripper simulation
+
+
+5. 查看历史：
+
+  git log --oneline
+
+输出类似：
+
+  ee562b0 chore: baseline RM75-6F fixed-gripper simulation
+
+每一行是一个提交：
+
+  提交号  提交说明
+
+
+6. 撤销未提交改动：
+
+  git restore 文件名
+
+例如：
+
+  git restore .gitignore
+
+含义：
+
+  把这个文件恢复到上一次 commit 的状态。
+
+注意：
+
+  这个命令会丢掉该文件当前未提交改动。
+  用之前最好先 git diff 看一眼。
+
+
+七、暂存区相关命令
+--------------------------------------------------------------------------------
+
+有时候你已经 git add 了，但又不想提交这个文件。
+
+撤出暂存区：
+
+  git restore --staged 文件名
+
+例如：
+
+  git restore --staged .gitignore
+
+含义：
+
+  文件改动还在。
+  只是从“准备提交”状态拿出来。
+
+区别：
+
+  git restore --staged 文件名
+    不丢改动，只是不提交。
+
+  git restore 文件名
+    丢掉文件里的未提交改动。
+
+典型流程：
+
+  git add .gitignore
+  git status
+  git restore --staged .gitignore
+  git status
+  git restore .gitignore
+  git status
+
+
+八、revert 和 reset 的区别
+--------------------------------------------------------------------------------
+
+你已经练过这两个命令。
+
+
+1. git revert：安全撤销
+
+命令：
+
+  git revert --no-edit HEAD
+
+含义：
+
+  新建一个“反向提交”，抵消上一个提交。
+  历史会保留。
+
+适合：
+
+  - 已经 push 到 GitHub 的提交。
+  - 团队协作。
+  - 想保留完整历史。
+
+例子：
+
+  6454ed7 docs: practice git workflow
+
+执行：
+
+  git revert --no-edit HEAD
+
+会生成：
+
+  028b348 Revert "docs: practice git workflow"
+
+效果：
+
+  文件内容被撤回。
+  历史里仍然能看到发生过什么。
+
+
+2. git reset --hard：强力回退
+
+命令：
+
+  git reset --hard 提交号
+
+例如：
+
+  git reset --hard ee562b0
+
+含义：
+
+  直接让当前分支回到某个提交。
+  后面的提交从当前分支历史里消失。
+  当前未提交改动也会被丢掉。
+
+适合：
+
+  - 自己本地练习。
+  - 还没有 push 到 GitHub。
+  - 明确知道要回到某个稳定版本。
+
+危险点：
+
+  它会丢掉未提交改动。
+
+执行前建议：
+
+  git status
+  git log --oneline
+
+如果工作区不干净，不要随便 reset --hard。
+
+
+九、HEAD 是什么
+--------------------------------------------------------------------------------
+
+HEAD 表示你当前所在的提交。
+
+例如：
+
+  ee562b0 (HEAD -> master) chore: baseline RM75-6F fixed-gripper simulation
+
+含义：
+
+  当前分支是 master。
+  master 指向 ee562b0。
+  HEAD 也指向 ee562b0。
+
+常见写法：
+
+  HEAD
+    当前提交。
+
+  HEAD~1
+    当前提交的上一个提交。
+
+  HEAD~2
+    当前提交往前数两个提交。
+
+例子：
+
+  git diff HEAD~1 HEAD
+
+含义：
+
+  比较上一个提交和当前提交之间的差异。
+
+
+十、机械臂项目推荐工作流
+--------------------------------------------------------------------------------
+
+不要等改一大堆才提交。
+
+推荐节奏：
+
+  1. 准备做一个小目标。
+  2. 改少量文件。
+  3. 能编译。
+  4. 能启动或通过静态检查。
+  5. commit。
+
+例如：
+
+目标：修改 sim_04 的预抓取高度。
+
+流程：
+
+  git status
+
+  修改：
+
+    src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+
+  检查：
+
+    python3 -m py_compile src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+
+  看改动：
+
+    git diff
+
+  暂存：
+
+    git add src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+
+  提交：
+
+    git commit -m "fix: tune sim_04 grasp height"
+
+
+十一、实验功能一定要用分支
+--------------------------------------------------------------------------------
+
+你之前尝试“可开合夹爪自由度”，就非常适合用分支。
+
+稳定主线：
+
+  master
+
+实验分支：
+
+  feature/gripper-motion
+
+创建并切换到实验分支：
+
+  git switch -c feature/gripper-motion
+
+查看当前分支：
+
+  git branch
+
+在分支上随便实验：
+
+  修改 xacro
+  修改 controller yaml
+  修改 launch
+  测试 Gazebo
+
+如果实验成功：
+
+  git add src study
+  git commit -m "feat: add simulated gripper motion"
+
+如果实验失败，想直接放弃整个分支：
+
+  git switch master
+  git branch -D feature/gripper-motion
+
+这样 master 稳定版本不会被污染。
+
+
+十二、分支合并
+--------------------------------------------------------------------------------
+
+如果实验分支成功了，要合并回 master：
+
+  git switch master
+  git merge feature/gripper-motion
+
+合并后可以删除分支：
+
+  git branch -d feature/gripper-motion
+
+注意：
+
+  合并前一定要确保实验分支能编译、能启动、能解释。
+
+建议检查：
+
+  catkin build rm_75_6f_description rm_75_gazebo rm_75_demo --summarize
+  python3 -m py_compile src/rm_75_robot/rm_75_demo/scripts/sim_04_vision_pick.py
+  roslaunch rm_75_gazebo arm_75_bringup_moveit.launch use_two_finger_gripper:=true --nodes
+
+
+十三、GitHub 远程仓库
+--------------------------------------------------------------------------------
+
+GitHub 用于备份和同步。
+
+基本步骤：
+
+  1. 登录 GitHub。
+  2. New repository。
+  3. 仓库名可以叫：
+
+       rm75-6f-robot-study
+
+  4. 不要勾选 Initialize with README。
+     因为本地已经有仓库。
+
+  5. GitHub 会给你一个远程地址，例如：
+
+       git@github.com:yourname/rm75-6f-robot-study.git
+
+     或：
+
+       https://github.com/yourname/rm75-6f-robot-study.git
+
+
+十四、连接 GitHub
+--------------------------------------------------------------------------------
+
+添加远程仓库：
+
+  git remote add origin 你的GitHub仓库地址
+
+例如：
+
+  git remote add origin git@github.com:yourname/rm75-6f-robot-study.git
+
+查看远程：
+
+  git remote -v
+
+第一次推送：
+
+  git push -u origin master
+
+以后推送：
+
+  git push
+
+如果你把分支改名为 main：
+
+  git branch -M main
+  git push -u origin main
+
+
+十五、常见问题
+--------------------------------------------------------------------------------
+
+问题 1：git log --online 报错
+
+错误命令：
+
+  git log --online
+
+正确命令：
+
+  git log --oneline
+
+记忆：
+
+  one line
+  合起来是 oneline
+
+
+问题 2：git status 看到 modified
+
+说明文件被改了。
+
+下一步：
+
+  git diff
+
+看清楚改了什么。
+
+
+问题 3：git add 错文件了
+
+撤出暂存区：
+
+  git restore --staged 文件名
+
+
+问题 4：文件改乱了但还没 commit
+
+撤销：
+
+  git restore 文件名
+
+
+问题 5：刚提交后发现错了
+
+安全撤销：
+
+  git revert --no-edit HEAD
+
+
+问题 6：本地练习提交太乱，想回稳定基线
+
+先看历史：
+
+  git log --oneline
+
+回到稳定提交：
+
+  git reset --hard ee562b0
+
+注意：
+
+  reset --hard 会丢弃未提交改动。
+
+
+问题 7：为什么不要提交 build/devel/logs
+
+因为这些是生成物。
+它们大、乱、容易因机器环境不同而变化。
+
+真正重要的是：
+
+  src/
+  study/
+  .gitignore
+
+
+问题 8：怎么知道现在是不是稳定版
+
+看状态：
+
+  git status
+
+看最近提交：
+
+  git log --oneline -1
+
+如果是：
+
+  nothing to commit, working tree clean
+
+并且最近提交是你认可的稳定说明，就说明当前干净。
+
+
+十六、给 RM75-6F 项目的提交命名建议
+--------------------------------------------------------------------------------
+
+模型相关：
+
+  git commit -m "fix: restore fixed gripper xacro"
+  git commit -m "feat: add RGB-D camera xacro option"
+  git commit -m "fix: raise base link above ground plane"
+
+Gazebo 相关：
+
+  git commit -m "fix: remove unstable gazebo pid gains"
+  git commit -m "feat: add table cube simulation world"
+  git commit -m "chore: update gazebo launch arguments"
+
+MoveIt 相关：
+
+  git commit -m "fix: use gripper tcp as end effector"
+  git commit -m "feat: add planning scene setup demo"
+
+脚本相关：
+
+  git commit -m "feat: add vision guided pick script"
+  git commit -m "fix: handle tf2 point transform import"
+  git commit -m "fix: avoid stale planning scene objects"
+
+学习资料：
+
+  git commit -m "docs: add git tutorial"
+  git commit -m "docs: update simulation pipeline notes"
+
+
+十七、推荐你的实际学习流程
+--------------------------------------------------------------------------------
+
+每天开始：
+
+  cd /home/ros/ws_rm_75_6f_robot
+  git status
+  git log --oneline -3
+
+准备实验：
+
+  git switch -c feature/实验名字
+
+比如：
+
+  git switch -c feature/gripper-motion
+
+实验过程中：
+
+  git status
+  git diff
+
+小步提交：
+
+  git add src study
+  git commit -m "说明这一步"
+
+实验失败：
+
+  git switch master
+  git branch -D feature/实验名字
+
+实验成功：
+
+  git switch master
+  git merge feature/实验名字
+
+
+十八、当前你应该记住的最小命令集
+--------------------------------------------------------------------------------
+
+每天都会用：
+
+  git status
+  git diff
+  git add 文件名
+  git commit -m "说明"
+  git log --oneline
+
+撤销未提交改动：
+
+  git restore 文件名
+
+撤出暂存区：
+
+  git restore --staged 文件名
+
+安全撤销提交：
+
+  git revert --no-edit HEAD
+
+本地强制回稳定版：
+
+  git reset --hard 提交号
+
+分支实验：
+
+  git switch -c feature/name
+  git switch master
+  git merge feature/name
+  git branch -D feature/name
+
+
+十九、最重要的习惯
+--------------------------------------------------------------------------------
+
+1. 改之前先 git status。
+
+2. 提交前先 git diff。
+
+3. 一个 commit 只做一件事。
+
+4. 能跑通再 commit。
+
+5. 危险实验开分支。
+
+6. 不提交 build/devel/logs。
+
+7. 看到不懂的 Git 提示，不急着乱敲，先读它给的建议。
+
+8. reset --hard 前确认没有重要未提交改动。
+
+9. 真机相关代码改动必须更小步、更频繁提交。
+
+10. 每次稳定状态都保存一个 commit。
+
+
+二十、一句话总结
+--------------------------------------------------------------------------------
+
+Git 不是为了“写代码更高级”，而是为了让你敢于实验。
+
+机械臂项目里，最怕的是：
+
+  改了很多文件，系统坏了，不知道哪里坏。
+
+有 Git 之后，正确节奏是：
+
+  稳定版 commit
+    -> 新分支实验
+    -> 成功就合并
+    -> 失败就丢掉分支
+
+这样你就不用害怕迭代出 bug。
