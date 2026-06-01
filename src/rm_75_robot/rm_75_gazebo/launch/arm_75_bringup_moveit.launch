@@ -7,13 +7,14 @@
     <arg name="debug" default="false"/>
     <arg name="use_rgbd_camera" default="false"/>
     <arg name="use_two_finger_gripper" default="false"/>
-    <arg name="rviz_software_rendering" default="false"/>
+    <arg name="use_rviz" default="true"/>
+    <arg name="rviz_software_rendering" default="true"/>
     <arg name="world_name" default="worlds/empty.world"/>
 
     <!--
-      The user's shell may export LIBGL_ALWAYS_SOFTWARE=1 for RViz compatibility.
-      Reset it here so Gazebo can use WSLg/D3D12/NVIDIA GPU rendering by default.
-      RViz can still opt back into software rendering through rviz_software_rendering.
+      Gazebo usually behaves better with GPU rendering, while RViz on WSL/remote
+      desktops often needs Mesa software rendering to display robot meshes.
+      Keep Gazebo on GPU by default, then pass a separate switch to RViz below.
     -->
     <env name="LIBGL_ALWAYS_SOFTWARE" value="0" />
 
@@ -37,6 +38,7 @@
     <!-- moveit launch file -->
     <include file="$(find rm_75_moveit_config)/launch/moveit_planning_execution.launch" >
         <arg name="rviz_gazebo_config" value="$(arg rvizconfig)" />
+        <arg name="use_rviz" value="$(arg use_rviz)" />
         <arg name="rviz_software_rendering" value="$(arg rviz_software_rendering)" />
     </include>
 

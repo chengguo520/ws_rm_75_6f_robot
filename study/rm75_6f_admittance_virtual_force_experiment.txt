@@ -1,0 +1,405 @@
+RM75-6F 虚拟外力导纳控制小实验
+================================
+
+实验目标
+--------
+- 在 Gazebo 仿真中验证第一版柔顺控制现象：给 RM75-6F 末端一个虚拟外力后，末端目标位姿产生可控的小位移；撤掉外力后，末端目标位姿逐渐回到初始平衡位姿。
+- 本实验暂时不接触桌面、不读取真实六维力传感器，也不做夹爪开合。
+- 第一版只做笛卡尔空间 x/y/z 平移导纳控制，姿态保持不变。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 仿真环境：ROS1 + Gazebo + MoveIt + ros_control
+- 机械臂：RM75-6F，关节 joint1 到 joint7
+- 控制方式：外层导纳控制 + MoveIt 位姿目标 + Gazebo 位置轨迹控制器
+- 新增脚本：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_05_admittance_virtual_force.py
+
+重要说明：
+- 当前实验默认控制 MoveIt 末端 link7。
+- 如果后面做擦桌子实验，应该再明确工具中心点 TCP，例如夹爪底部或擦拭布接触点。
+- 固定夹爪在本实验中可以看作刚性工具，不需要关闭。
+
+ROS 框架关系
+------------
+主要节点：
+
+1. Gazebo
+   - 负责仿真 RM75-6F 物理模型。
+
+2. gazebo_ros_control
+   - URDF 中通过 libgazebo_ros_control.so 插件连接 Gazebo 和 ros_control。
+   - 当前 RM75-6F Gazebo 模型使用 PositionJointInterface。
+
+3. /arm/arm_joint_controller
+   - 类型：position_controllers/JointTrajectoryController
+   - 接收 MoveIt 发来的 FollowJointTrajectory 轨迹。
+   - action 路径：
+     /arm/arm_joint_controller/follow_joint_trajectory
+
+4. move_group
+   - MoveIt 的核心规划节点。
+   - 根据目标末端位姿求 IK 和关节轨迹。
+
+5. sim_05_admittance_virtual_force.py
+   - 新增导纳控制实验节点。
+   - 内部计算虚拟质量-阻尼-弹簧模型。
+   - 发布导纳目标位姿。
+   - 加 --execute 参数后，通过 MoveIt 把小步目标发送给 Gazebo 机械臂执行。
+
+关键 topic：
+
+1. /rm75_admittance/target_wrench
+   - 类型：geometry_msgs/WrenchStamped
+   - 作用：输入虚拟六维力/力矩。
+   - 本实验只使用 force.x、force.y、force.z，单位 N。
+   - torque 暂时忽略，因为第一版不做姿态柔顺。
+
+2. /rm75_admittance/target_pose
+   - 类型：geometry_msgs/PoseStamped
+   - 作用：导纳模型计算出的末端目标位姿。
+   - 默认参考坐标系：base_link。
+
+3. /rm75_admittance/state
+   - 类型：std_msgs/String
+   - 作用：调试输出，包含 force_N、offset_m、velocity_mps。
+
+4. /joint_states
+   - 类型：sensor_msgs/JointState
+   - 作用：Gazebo/ros_control 发布机械臂当前关节状态。
+
+5. /tf
+   - 作用：robot_state_publisher 根据 /joint_states 发布各 link 坐标变换。
+
+数据流/控制流程
+---------------
+默认演示模式：
+
+脚本内置虚拟力 Fx = 5N，持续 4 秒
+  -> 导纳模型计算 offset 和 velocity
+  -> 发布 /rm75_admittance/target_pose
+  -> 如果没有 --execute，只观察目标位姿和状态
+  -> 如果加 --execute，MoveIt 将目标位姿转成关节轨迹
+  -> /arm/arm_joint_controller/follow_joint_trajectory
+  -> Gazebo 中 RM75-6F 小步运动
+
+使用外部 topic 输入虚拟力：
+
+rostopic pub /rm75_admittance/target_wrench geometry_msgs/WrenchStamped ...
+  -> sim_05_admittance_virtual_force.py
+  -> 导纳模型
+  -> /rm75_admittance/target_pose
+  -> MoveIt/ros_control/Gazebo
+
+关键公式或控制逻辑
+------------------
+导纳控制 admittance control 的核心思想：
+
+外力输入 -> 位置/速度输出
+
+本实验使用虚拟质量-阻尼-弹簧模型：
+
+M * x_ddot + D * x_dot + K * x = F_ext
+
+其中：
+- M：虚拟质量，单位 kg
+- D：虚拟阻尼，单位 N*s/m
+- K：虚拟刚度，单位 N/m
+- x：末端相对平衡位姿的偏移，单位 m
+- x_dot：虚拟速度，单位 m/s
+- x_ddot：虚拟加速度，单位 m/s^2
+- F_ext：外部虚拟力，单位 N
+
+程序中的离散更新：
+
+a = (F - D*v - K*x) / M
+v = v + a*dt
+x = x + v*dt
+
+默认参数：
+- M = [2.0, 2.0, 2.0]
+- D = [40.0, 40.0, 40.0]
+- K = [80.0, 80.0, 80.0]
+- 最大偏移 max_offset = [0.05, 0.05, 0.04] m
+- 最大虚拟速度 max_velocity = [0.03, 0.03, 0.025] m/s
+
+参数理解：
+- K 越大，越硬，受到同样外力时偏移越小。
+- K 越小，越软，受到同样外力时偏移越大。
+- D 越大，越稳但反应更慢。
+- D 太小，可能出现来回振荡。
+- M 越大，启动和停止越慢。
+
+为什么第一版不直接做阻抗控制：
+- 当前 Gazebo 模型走 PositionJointInterface 和 JointTrajectoryController。
+- 直接做力矩级阻抗控制需要切换到 EffortJointInterface，并处理动力学、重力补偿、Jacobian、关节力矩限幅。
+- 第一阶段用外层导纳控制更适合现在的仿真框架。
+
+命令行操作
+----------
+终端 1：启动 Gazebo + MoveIt
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rospack find rm_75_gazebo
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+说明：
+- rospack find rm_75_gazebo 应该输出：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo
+  如果输出到别的工作区，说明当前终端没有 source 本工作区，roslaunch 会启动另一份同名 package。
+- 当前 launch 已默认让 RViz 使用软件渲染：
+  rviz_software_rendering:=true
+- Gazebo 仍会优先使用 GPU 渲染，因为顶层 launch 会先把全局 LIBGL_ALWAYS_SOFTWARE 设回 0，再只给 RViz 节点单独设置 LIBGL_ALWAYS_SOFTWARE=1。
+- 如果某台机器 RViz 使用 GPU 也正常，可以显式关闭：
+  roslaunch rm_75_gazebo arm_75_bringup_moveit.launch rviz_software_rendering:=false
+
+后台排查模式：
+
+如果只想验证 Gazebo/MoveIt/控制器，不想启动 RViz 和 Gazebo GUI，可以运行：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch gui:=false use_rviz:=false
+
+这个模式适合配合 rostopic echo /joint_states 判断关节是否真的在动。
+
+终端 2：先只观察导纳输出，不执行机械臂运动
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_05_admittance_virtual_force.py
+
+终端 3：观察目标位姿
+
+rostopic echo /rm75_admittance/target_pose
+
+终端 4：观察导纳状态
+
+rostopic echo /rm75_admittance/state
+
+如果确认输出正常，再执行机械臂小步运动：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute
+
+如果 Gazebo/RViz 里 5 cm 偏移不明显，可以直接运行“明显演示版”：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --visible-demo
+
+--visible-demo 会自动启用 --execute，并使用下面这组更容易观察的参数：
+- x 方向虚拟外力：8 N
+- 外力持续时间：6 s
+- 总实验时长：16 s
+- x 方向最大偏移：0.10 m
+- x 方向最大虚拟速度：0.06 m/s
+- x 方向刚度：45 N/m
+- x 方向阻尼：35 N*s/m
+- 执行模式：planner-mode=joint-proxy
+- 预备姿态：prepare=true，先从零位移动到一个小弯曲姿态，再把该姿态下的 link7 位姿作为导纳平衡位姿
+
+为什么明显演示版使用 joint-proxy：
+- Gazebo 刚启动时 RM75-6F 几乎在全零竖直姿态，末端在 x≈0、z≈0.909 附近，这个姿态对 KDL/MoveIt IK 来说接近奇异位形。
+- 如果强制保持 link7 的完整姿态，再要求 x 方向平移，容易出现 TIMED_OUT、points=0，或者 compute_cartesian_path 的 fraction 很低。
+- 即使只约束末端位置，当前 MoveIt/KDL 配置也可能出现 Unable to sample any valid states for goal tree。
+- 第一版实验的目标是先验证“虚拟力 -> 导纳 offset -> Gazebo 中可见运动 -> 撤力回位”的闭环流程，所以明显演示版使用 joint-proxy。
+- joint-proxy 的含义：导纳模型仍然计算笛卡尔 offset，但执行时把 offset 映射成一个温和的关节弯曲/回弹模式，直接发送到 /arm/arm_joint_controller/follow_joint_trajectory。
+- 这不是最终的真实笛卡尔柔顺控制算法，只是第一课用于绕开 IK 问题、稳定观察现象的 Gazebo 可视化后端。
+- 脚本会先执行一个温和的预备关节姿态：
+  [joint1, joint2, joint3, joint4, joint5, joint6, joint7]
+  [0.0, 0.25, 0.0, 0.35, 0.0, 0.20, 0.0]
+  然后以这个姿态下的 link7 位姿作为导纳平衡位姿。
+
+position 模式说明：
+- position 模式只约束末端位置，不强制保持腕部姿态。
+- 如果 MoveIt/KDL 能稳定采样 IK，它比 joint-proxy 更接近“末端位置跟随导纳目标”。
+- 当前工作区里它可能仍然 TIMED_OUT，所以默认明显演示版不用它。
+
+MoveIt IK 配置：
+- 本工作区原始 KDL 求解超时 kinematics_solver_timeout 是 0.005 s，太容易导致小目标 IK 采样失败。
+- 已改为 0.1 s：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_moveit_config/config/kinematics.yaml
+- 这个修改对后续真正做笛卡尔/位置目标规划更友好，但第一版明显演示仍然默认使用 joint-proxy。
+
+cartesian 模式说明：
+- cartesian 模式使用 MoveIt 的 compute_cartesian_path，对短距离末端直线小步更直接。
+- 但在当前 RM75-6F 模型和初始姿态下，x 方向保持姿态的 Cartesian IK 可能只返回 partial path，甚至 fraction=0。
+- 当前环境的 moveit_commander API 形式是：
+  compute_cartesian_path(waypoints, eef_step, avoid_collisions)
+  第三个参数是 bool，不是 jump_threshold。
+  如果写成 0.0，会出现 Boost.Python.ArgumentError。
+
+注意：
+- 这个参数组合只用于 Gazebo 里看清楚现象。
+- 不要把这组参数直接搬到实物机械臂。
+- 如果 MoveIt 规划失败，先把 x 方向最大偏移降到 0.08 m：
+  rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --demo-force-x 8 --demo-force-duration 6 --duration 16 --stiffness 50 80 80 --damping 35 40 40 --max-offset 0.08 0.05 0.04 --max-velocity 0.05 0.03 0.025
+
+如果想手动指定只约束末端位置的执行方式：
+
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --prepare --planner-mode position
+
+如果想手动指定 Gazebo 可视化关节代理后端：
+
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --prepare --planner-mode joint-proxy
+
+如果想手动指定笛卡尔路径执行：
+
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --planner-mode cartesian
+
+如果想复现普通 MoveIt 位姿规划：
+
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --planner-mode pose
+
+使用外部 topic 输入虚拟力：
+
+终端 2 启动节点，使用 topic wrench：
+
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --use-topic-wrench
+
+终端 3 发布一个 x 方向 5N 的虚拟力：
+
+rostopic pub -r 20 /rm75_admittance/target_wrench geometry_msgs/WrenchStamped "header:
+  frame_id: 'base_link'
+wrench:
+  force:
+    x: 5.0
+    y: 0.0
+    z: 0.0
+  torque:
+    x: 0.0
+    y: 0.0
+    z: 0.0"
+
+停止 rostopic pub 后，节点会在 wrench-timeout 后把外力当成 0，导纳目标会回到平衡位姿。
+
+可调参数示例：
+
+更软：
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --stiffness 40 40 60
+
+更硬：
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --stiffness 150 150 150
+
+减小最大偏移：
+rosrun rm_75_demo sim_05_admittance_virtual_force.py --max-offset 0.02 0.02 0.02
+
+观察现象
+--------
+不加 --execute：
+- 机械臂不会动。
+- /rm75_admittance/target_pose 会先沿 x 方向逐渐偏移。
+- 内置力持续 4 秒后变成 0，target_pose 会慢慢回到初始平衡位姿附近。
+- /rm75_admittance/state 中 offset_m 先增大，再逐渐回零。
+
+加 --execute：
+- MoveIt 会周期性规划小步位姿目标。
+- Gazebo 中 RM75-6F 的 link7 末端应出现小幅柔顺偏移。
+- 内置力释放后，机械臂应逐步回到初始附近。
+
+使用 --visible-demo：
+- 末端 x 方向偏移会比默认参数更明显，最大约 10 cm。
+- 日志中 offset[m] 的 x 分量可能逐渐到 0.1000，然后受 max_offset 限幅保持在 0.1000。
+- 外力撤掉后，offset[m] 会逐步回到 0 附近。
+- 如果看到 offset[m]=[0.0500, 0.0000, 0.0000] 长时间保持，说明默认版本已经达到 5 cm 限幅，并不是程序卡住。
+- 日志中应看到：
+  Prepare joint execute returned: True
+  Joint-proxy target joints: [...]
+  Joint-proxy result error_code=0
+  这说明先移动到了非奇异预备姿态，并且 Gazebo 控制器收到了后续位置目标轨迹。
+- 实测现象：
+  预备姿态附近关节约为 [joint2=0.25, joint4=0.35, joint6=0.20]。
+  x offset 增大到 0.10 m 时，joint-proxy 会把关节推到大约 [joint2=0.37, joint4=0.07, joint6=0.36]。
+  外力撤掉后，offset 回零，关节回到预备姿态附近。
+
+排错 checklist
+--------------
+1. rosrun 找不到脚本
+   - 检查是否 source：
+     source /home/ros/ws_rm_75_6f_robot/devel/setup.bash
+   - 检查脚本是否有可执行权限：
+     ls -l src/rm_75_robot/rm_75_demo/scripts/sim_05_admittance_virtual_force.py
+
+2. 提示 ROS master is not running
+   - 先启动：
+     roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+3. /rm75_admittance/target_pose 没有数据
+   - 检查节点是否启动：
+     rosnode list | grep sim_05
+   - 检查 topic：
+     rostopic list | grep rm75_admittance
+
+4. 加 --execute 后机械臂不动
+   - 检查 MoveIt 是否启动：
+     rosnode list | grep move_group
+   - 检查控制器 action：
+     rostopic list | grep arm_joint_controller
+   - 检查 /joint_states：
+     rostopic echo -n1 /joint_states
+   - 检查 Gazebo 轨迹控制器状态：
+     rostopic echo -n1 /arm/arm_joint_controller/state
+   - 检查 action server 是否存在：
+     rostopic list | grep follow_joint_trajectory
+   - 如果脚本启动时出现：
+     Preflight OK: received ... joints from /joint_states
+     Preflight OK: trajectory action server is available: /arm/arm_joint_controller/follow_joint_trajectory
+     说明 Gazebo/ros_control 基本话题和 action 已经起来。
+   - 如果看到 MoveIt pose plan failed: TIMED_OUT, points=0，说明是普通位姿规划没有给出轨迹，不是导纳模型没算。
+     优先改用：
+     rosrun rm_75_demo sim_05_admittance_virtual_force.py --visible-demo
+     或：
+     rosrun rm_75_demo sim_05_admittance_virtual_force.py --execute --prepare --planner-mode joint-proxy
+   - 如果看到 Cartesian path failed: fraction=0.000 或 fraction 很低，说明保持当前姿态的笛卡尔直线路径 IK 没走通。
+     第一版演示优先使用 --planner-mode joint-proxy。
+   - 如果看到 Position plan target ... TIMED_OUT 或 Unable to sample any valid states for goal tree：
+     说明 MoveIt/KDL 没能为目标位置采样到有效 IK。
+     这时先用 joint-proxy 观察导纳现象，后续再单独优化 IK、TCP、规划约束。
+
+5. MoveIt plan failed
+   - 当前目标可能离初始姿态太近但 IK 不稳定，或姿态/碰撞限制导致失败。
+   - 先不加 --execute，只看 target_pose 是否合理。
+   - 对导纳小步执行，优先使用笛卡尔路径：
+     --planner-mode cartesian
+   - 如果出现 Boost.Python.ArgumentError，并提到 compute_cartesian_path(... list, float, float) 不匹配 C++ signature：
+     说明本机 MoveIt Python API 第三个参数需要 bool avoid_collisions。
+     本脚本已经按当前环境改为：
+     compute_cartesian_path(waypoints, eef_step, True)
+   - 减小最大偏移：
+     --max-offset 0.02 0.02 0.02
+   - 减小速度：
+     --max-velocity 0.01 0.01 0.01
+
+6. Gazebo 中出现抖动
+   - 增大阻尼 D：
+     --damping 60 60 60
+   - 增大 move-period：
+     --move-period 1.2
+   - 降低 MoveIt 速度缩放：
+     --velocity-scaling 0.04 --acceleration-scaling 0.04
+
+7. Gazebo 正常显示，但 RViz 黑屏、窗口空白或机器人模型不显示
+   - 本工作区已经把常用启动命令默认改为 RViz 软件渲染：
+     roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+   - 如果想确认参数链路，可以显式写出：
+     roslaunch rm_75_gazebo arm_75_bringup_moveit.launch rviz_software_rendering:=true
+   - 这个参数只作用在 RViz 节点，不会强制 Gazebo 改成软件渲染。
+   - 如果 RViz 仍然没有窗口，查看终端里 rviz 相关报错，重点关注 OpenGL、OGRE、Qt、display 等关键词。
+
+安全与限幅
+----------
+- 本实验虽然在仿真中运行，但仍然默认做了位移和速度限幅。
+- 默认最大平移偏移不超过 5 cm，z 方向不超过 4 cm。
+- 默认最大虚拟速度不超过 3 cm/s。
+- 如果未来迁移到实物，必须先在空中、小力、小速度、小范围验证。
+- 不要直接把大力、大位移参数搬到真实机械臂上。
+
+下一步
+------
+1. 在 Gazebo 中实际运行 --execute，观察 RM75-6F 是否能完成“给力偏移、撤力回位”。
+2. 调整 M/D/K，体会软硬、阻尼、响应速度的变化。
+3. 把控制点从 link7 扩展到明确的工具 TCP。
+4. 添加 Gazebo 接触/力传感器或简化接触力估计。
+5. 准备擦桌子实验：x/y 按轨迹运动，z 方向做柔顺或恒力控制。
