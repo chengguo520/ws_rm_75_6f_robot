@@ -65,7 +65,7 @@ ROS 框架关系
 
 4. /rm75_admittance_stream/state
    - 类型：std_msgs/String
-   - 包含 force_N、offset_m、velocity_mps、target_joints。
+   - 包含 dt、force_N、offset_m、velocity_mps、raw_target_joints、target_joints、measured_joints、joint_error_max。
 
 5. /joint_states
    - 类型：sensor_msgs/JointState
@@ -116,6 +116,9 @@ x = x + v*dt
 默认参数：
 - 控制发布频率 rate = 30 Hz
 - command_horizon = 0.12 s
+- joint_smoothing_alpha = 0.45
+- max_joint_step = 0.02 rad/control-cycle
+- settle_duration = 2.0 s
 - 虚拟力 Fx = 8 N
 - 虚拟力持续时间 = 6 s
 - 总实验时间 = 16 s
@@ -131,6 +134,25 @@ command_horizon 的含义：
 - controller 会尝试在这个短时间内跟到新目标。
 - horizon 太大，响应慢。
 - horizon 太小，控制器可能来不及执行，出现抖动或跟踪不稳。
+
+joint_smoothing_alpha 的含义：
+- 这是关节目标的一阶低通滤波系数。
+- 公式：
+  q_cmd = q_prev + alpha * (q_raw - q_prev)
+- alpha 越小，运动越柔和，但响应更慢。
+- alpha 越接近 1，越接近原始目标，响应更快但可能更生硬。
+- 默认 0.45 是为了让 Gazebo 里看起来更连续。
+
+max_joint_step 的含义：
+- 单位是 rad/control-cycle。
+- 它限制每一个控制周期里，target_joints 最多变化多少。
+- 默认 0.02 rad/周期。
+- 如果设置为 <= 0，则关闭这个限幅。
+
+settle_duration 的含义：
+- 主实验 duration 结束后，继续用零外力跑一段导纳积分。
+- 这样 offset 和 velocity 会更自然地回零，关节命令也会逐步回到 equilibrium_joints 附近。
+- 这比旧版本“继续发布当前 offset 对应目标”更合理。
 
 当前 joint-proxy 映射：
 
@@ -196,13 +218,25 @@ wrench:
 调参示例：
 
 更顺一点但响应慢一点：
-rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 30 --command-horizon 0.18
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 30 --command-horizon 0.16 --joint-smoothing-alpha 0.30
 
 响应更快：
-rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 50 --command-horizon 0.08
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 50 --command-horizon 0.08 --joint-smoothing-alpha 0.70
 
 偏移小一点：
 rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-offset 0.05 0.03 0.03 --demo-force-x 5
+
+限制关节命令每周期变化，进一步降低突兀感：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-joint-step 0.01 --joint-smoothing-alpha 0.35
+
+关闭关节步长限幅，只保留低通滤波：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-joint-step 0.0
+
+关闭低通滤波，观察原始 joint-proxy 命令质感：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --joint-smoothing-alpha 1.0
 
 观察现象
 --------
@@ -210,7 +244,10 @@ rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-offset 0.05 0
 - 脚本先执行预备姿态。
 - 终端输出 Command topic connected。
 - force_N=[8.0000, 0.0000, 0.0000] 时 offset_x 增大。
-- /rm75_admittance_stream/state 中 target_joints 连续变化。
+- /rm75_admittance_stream/state 中 raw_target_joints 和 target_joints 连续变化。
+- target_joints 是经过滤波和步长限幅后的最终控制命令。
+- measured_joints 是 /joint_states 中的实际反馈。
+- joint_error_max 表示 target_joints 和 measured_joints 之间最大的关节误差。
 - Gazebo 中机械臂比 sim_05 更连续地偏移。
 - 6 秒后 force_N 变为 0，offset_x 逐渐回零，机械臂回到预备姿态附近。
 
@@ -247,11 +284,19 @@ rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-offset 0.05 0
 4. 还是有轻微卡顿
    - 这是因为 JointTrajectoryController 仍然是位置轨迹控制器，不是真正的速度/力矩伺服接口。
    - 可以尝试：
-     --rate 50 --command-horizon 0.08
+     --rate 50 --command-horizon 0.08 --joint-smoothing-alpha 0.50
    - 如果开始抖动，改回：
-     --rate 30 --command-horizon 0.12
+     --rate 30 --command-horizon 0.16 --joint-smoothing-alpha 0.30 --max-joint-step 0.01
 
-5. 预备姿态规划失败
+5. joint_error_max 一直很大
+   - 说明控制器实际关节反馈跟不上 target_joints。
+   - 先让命令变温和：
+     rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 30 --command-horizon 0.16 --joint-smoothing-alpha 0.30 --max-joint-step 0.01
+   - 再观察：
+     rostopic echo /rm75_admittance_stream/state
+   - 如果 joint_error_max 变小，说明之前命令太激进。
+
+6. 预备姿态规划失败
    - 先验证 MoveIt 关节目标是否能动：
      rosrun rm_75_demo moveit_joint_goal_demo.py
    - 如果这个也失败，说明 MoveIt 或控制器链路需要先排查。
@@ -260,12 +305,14 @@ rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --max-offset 0.05 0
 ----------
 - 默认最大 offset_x 是 0.10 m，只用于 Gazebo 可视化。
 - 默认最大虚拟速度 x 是 0.06 m/s。
+- 默认最大关节目标步长是 0.02 rad/control-cycle。
+- 默认关节目标低通滤波 alpha 是 0.45。
 - joint-proxy 是经验映射，不要直接迁移到实物。
 - 实物柔顺控制需要使用真实力传感器、厂家力位控制接口，或者经过严格限幅的低速外环控制。
 
 下一步
 ------
-1. 对比 sim_05 和 sim_06 的顺滑程度。
-2. 调整 rate、command_horizon、D、K，观察响应和抖动。
+1. 对比不同 joint_smoothing_alpha 和 max_joint_step 对顺滑程度的影响。
+2. 观察 joint_error_max，理解 JointTrajectoryController 对短 horizon 命令的跟随能力。
 3. 后续把 joint-proxy 替换成真正 IK 或 Jacobian 速度映射。
 4. 再往后做擦桌子实验：x/y 给轨迹，z 方向做导纳或恒力控制。

@@ -1,0 +1,228 @@
+RM75-6F sim_07：IK 位置映射导纳实验
+===================================
+
+实验目标
+--------
+- 在 Gazebo 中验证“导纳 offset -> 末端目标 pose -> MoveIt IK -> 关节命令”的流程。
+- 相比 sim_06，sim_07 不再使用 joint-proxy 经验映射，而是把导纳输出真正转换成 link7 的目标位姿。
+- 这个实验用于理解 IK 位置映射，不是最终高频柔顺伺服。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 仿真环境：ROS1 Noetic + Gazebo + MoveIt + ros_control
+- 脚本：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_07_admittance_ik_position.py
+- 关键依赖：
+  moveit_msgs/GetPositionIK
+  trajectory_msgs/JointTrajectory
+
+ROS 框架关系
+------------
+主要节点：
+
+1. /gazebo
+   - 负责机械臂仿真。
+
+2. /move_group
+   - 提供 /compute_ik 服务。
+   - sim_07 用它把 target_pose 解成 target_joints。
+
+3. /arm/arm_joint_controller
+   - Gazebo 中的 JointTrajectoryController。
+   - 订阅 /arm/arm_joint_controller/command。
+
+4. sim_07_admittance_ik_position.py
+   - 计算导纳 offset。
+   - 发布 target_pose。
+   - 调用 /compute_ik。
+   - 发布 target_joints 到 /arm/arm_joint_controller/command。
+
+关键 topic/service：
+
+1. /compute_ik
+   - 类型：moveit_msgs/GetPositionIK
+   - 输入：目标 PoseStamped、group_name、ik_link_name、seed robot_state。
+   - 输出：IK 解和 error_code。
+
+2. /rm75_admittance_ik/target_wrench
+   - 类型：geometry_msgs/WrenchStamped
+   - 可选外部虚拟力输入。
+
+3. /rm75_admittance_ik/target_pose
+   - 类型：geometry_msgs/PoseStamped
+   - 导纳 offset 对应的真正 IK 目标位姿。
+
+4. /rm75_admittance_ik/state
+   - 类型：std_msgs/String
+   - 包含 ik_success、ik_status、force_N、offset_m、target_xyz、raw_target_joints、target_joints、joint_error_max。
+
+5. /arm/arm_joint_controller/command
+   - 类型：trajectory_msgs/JointTrajectory
+   - IK 解经过平滑和步长限幅后，发布到这里。
+
+数据流/控制流程
+---------------
+默认流程：
+
+虚拟外力 Fx=5N
+  -> 导纳模型 M/D/K
+  -> offset_m
+  -> equilibrium_pose + offset_m = target_pose
+  -> /compute_ik 解出 raw_target_joints
+  -> 关节目标低通滤波和每周期步长限幅
+  -> /arm/arm_joint_controller/command
+  -> Gazebo 机械臂运动
+
+和 sim_06 的区别：
+
+sim_06：
+offset
+  -> joint-proxy 经验映射
+  -> target_joints
+
+sim_07：
+offset
+  -> target_pose
+  -> MoveIt IK
+  -> target_joints
+
+关键公式或控制逻辑
+------------------
+导纳公式：
+
+M * x_ddot + D * x_dot + K * x = F_ext
+
+IK 请求：
+
+target_pose = equilibrium_pose + offset
+
+/compute_ik 输入：
+- group_name = arm
+- ik_link_name = link7
+- pose_stamped = target_pose
+- robot_state = 当前 /joint_states 作为 seed
+
+为什么要用当前 /joint_states 做 seed：
+- RM75 是 7 自由度机械臂，同一个末端位姿可能有多个关节解。
+- 用当前关节角作为 seed，可以让 IK 解更接近当前姿态，减少跳变。
+
+默认参数：
+- rate = 10 Hz
+- command_horizon = 0.20 s
+- demo_force_x = 5 N
+- max_offset = [0.06, 0.03, 0.03] m
+- max_velocity = [0.025, 0.015, 0.015] m/s
+- ik_timeout = 0.05 s
+- joint_smoothing_alpha = 0.35
+- max_joint_step = 0.015 rad/control-cycle
+
+命令行操作
+----------
+终端 1：启动 Gazebo + MoveIt
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+终端 2：运行 sim_07
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_07_admittance_ik_position.py
+
+观察 IK 状态：
+
+rostopic echo /rm75_admittance_ik/state
+
+观察目标位姿：
+
+rostopic echo -n1 /rm75_admittance_ik/target_pose
+
+观察控制命令：
+
+rostopic echo -n1 /arm/arm_joint_controller/command
+
+使用外部 wrench：
+
+rosrun rm_75_demo sim_07_admittance_ik_position.py --use-topic-wrench
+
+另一个终端发布外力：
+
+rostopic pub -r 10 /rm75_admittance_ik/target_wrench geometry_msgs/WrenchStamped "header:
+  frame_id: 'base_link'
+wrench:
+  force:
+    x: 4.0
+    y: 0.0
+    z: 0.0
+  torque:
+    x: 0.0
+    y: 0.0
+    z: 0.0"
+
+调参示例
+--------
+IK 更稳、更慢：
+
+rosrun rm_75_demo sim_07_admittance_ik_position.py --rate 8 --command-horizon 0.25 --joint-smoothing-alpha 0.25 --max-joint-step 0.01
+
+响应稍快：
+
+rosrun rm_75_demo sim_07_admittance_ik_position.py --rate 15 --command-horizon 0.16 --joint-smoothing-alpha 0.50
+
+偏移更小：
+
+rosrun rm_75_demo sim_07_admittance_ik_position.py --demo-force-x 3 --max-offset 0.04 0.02 0.02
+
+观察现象
+--------
+成功时应该看到：
+- 先移动到预备姿态。
+- /compute_ik 服务可用。
+- ik_success=True。
+- force_N 有值时 offset_x 增大。
+- target_xyz 是 equilibrium_pose 加上 offset 后的位置。
+- Gazebo 中机械臂跟随 IK 解运动。
+- 撤力后 offset 回零，target_xyz 回到平衡位姿附近。
+
+排错 checklist
+--------------
+1. 等不到 /compute_ik
+   - 确认 move_group 已启动：
+     rosnode list | grep move_group
+   - 确认服务存在：
+     rosservice list | grep compute_ik
+
+2. ik_success=False
+   - 目标位姿可能不可达或接近奇异。
+   - 减小偏移：
+     --max-offset 0.03 0.02 0.02 --demo-force-x 3
+   - 降低速度：
+     --max-velocity 0.015 0.010 0.010
+
+3. 运动跳变
+   - 降低 alpha：
+     --joint-smoothing-alpha 0.25
+   - 限制步长：
+     --max-joint-step 0.01
+
+4. 机械臂不动
+   - 检查命令 topic：
+     rostopic echo -n1 /arm/arm_joint_controller/command
+   - 检查控制器状态：
+     rostopic echo -n1 /arm/arm_joint_controller/state
+
+安全与限幅
+----------
+- sim_07 默认偏移比 sim_06 小，因为 IK 失败风险更高。
+- max_offset、max_velocity、max_joint_step 都是安全限制。
+- 当前脚本只适合 Gazebo 学习，不要直接迁移到实物。
+- 实物上如果要做 IK 外环，必须加入更严格的速度、加速度、关节限位和急停逻辑。
+
+下一步
+------
+- 用 sim_07 理解“末端目标 pose 和 IK 解”的关系。
+- 如果 IK 经常失败，说明单纯每周期 IK 不是最好的柔顺主线。
+- 下一步看 sim_08：Jacobian 伪逆速度映射，更接近连续柔顺控制。
+
