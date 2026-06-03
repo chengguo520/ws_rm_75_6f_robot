@@ -1,0 +1,177 @@
+RM75-6F 实物六维力只读调试
+==========================
+
+实验目标
+--------
+- 在实物分支 feature/real-force-compliance 中建立独立的实物力控调试入口。
+- 第一阶段只读取 RM75-6F 末端六维力，不发送运动命令，不开启力位混合控制。
+- 确认真实六维力数据 Fx/Fy/Fz/Mx/My/Mz 能稳定读取，并能发布成 ROS topic。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 分支：feature/real-force-compliance
+- 实物机械臂：RM75-6F
+- 默认机械臂 IP：192.168.1.18
+- 默认端口：8080
+- 厂家 C++ SDK 示例路径：/home/ros/机械臂/rm_base_cmake_example
+
+新增 package
+------------
+src/rm_75_robot/rm_75_real_force_control
+
+这个包和 Gazebo/MoveIt 仿真包分开，只用于实物 RM75-6F 力传感器和后续力控接口调试。
+
+ROS 框架关系
+------------
+rm75_force_read_only_node
+  -> 厂家 C++ API：RM_API_Init / Arm_Socket_Start / Get_Force_Data
+  -> 发布 /rm75_force_sensor/wrench
+  -> 提供 /rm75_force_sensor/zero
+  -> 提供 /rm75_force_control/stop_hybrid
+
+关键 topic/service
+------------------
+topic:
+/rm75_force_sensor/wrench
+  类型：geometry_msgs/WrenchStamped
+  force.x/y/z 单位：N
+  torque.x/y/z 单位：Nm
+
+service:
+/rm75_force_sensor/zero
+  类型：std_srvs/Trigger
+  调用 Clear_Force_Data
+  只清零传感器偏置，不控制机械臂运动
+
+/rm75_force_control/stop_hybrid
+  类型：std_srvs/Trigger
+  调用 Stop_Force_Postion
+  用于退出普通力位混合控制，不开启力控，不发送轨迹
+
+数据流/控制流程
+---------------
+真实六维力传感器
+  -> 机械臂控制器
+  -> TCP 8080
+  -> 厂家 RM_Base C++ API
+  -> Get_Force_Data
+  -> rm75_force_read_only_node
+  -> /rm75_force_sensor/wrench
+
+安全边界
+--------
+当前节点不会调用：
+- Movej_Cmd
+- Movel_Cmd
+- Set_Force_Postion
+- Start_Force_Position_Move
+- Force_Position_Move_POSE
+- Force_Position_Move_Joint
+
+所以它不会让机械臂主动运动，也不会开启力位混合。
+
+命令行操作
+----------
+1. 编译：
+
+cd /home/ros/ws_rm_75_6f_robot
+catkin build rm_75_real_force_control
+
+如果本机没有 catkin build，可以用：
+
+cd /home/ros/ws_rm_75_6f_robot
+catkin_make --pkg rm_75_real_force_control
+
+2. source 工作区：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+
+3. 确认网络：
+
+ping 192.168.1.18
+
+4. 启动只读力传感器节点：
+
+roslaunch rm_75_real_force_control force_read_only.launch
+
+如果机械臂 IP 不同：
+
+roslaunch rm_75_real_force_control force_read_only.launch arm_ip:=你的机械臂IP
+
+5. 另开终端观察力数据：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rostopic echo /rm75_force_sensor/wrench
+
+6. 机械臂静止、末端不接触外界时清零：
+
+rosservice call /rm75_force_sensor/zero
+
+7. 如果之前误开了普通力位混合，可尝试停止：
+
+rosservice call /rm75_force_control/stop_hybrid
+
+观察现象
+--------
+成功时：
+- 终端每秒打印一次 force[N] 和 torque[Nm]。
+- rostopic echo 能看到 geometry_msgs/WrenchStamped。
+- 手轻推末端时，对应方向的 Fx/Fy/Fz 或力矩会变化。
+
+第一轮调试应该记录：
+- 空载静止时的零漂大概是多少。
+- 清零后噪声范围是多少。
+- 手推工具 X/Y/Z 正方向时，力数据正负号如何变化。
+- 当前 frame_id 只是 rm75_tool_force_sensor 标签，真实坐标方向需要通过实物推力确认。
+
+2026-06-03 首次实物只读结果
+---------------------------
+已验证：
+- ping 192.168.1.18 成功，3 次均收到响应。
+- catkin build rm_75_real_force_control 成功。
+- roslaunch rm_75_real_force_control force_read_only.launch 成功连接实物控制器。
+- 节点能连续调用 Get_Force_Data 并打印六维力。
+
+未清零时的静止读数大致为：
+Fx = -1.7N
+Fy =  1.1N
+Fz = -15.1N
+Mx =  0.04Nm
+My =  0.51Nm
+Mz =  0.27Nm
+
+判断：
+- 当前六维力传感器链路已经通。
+- Fz 存在明显偏置，下一步应在末端静止、不接触外界时调用 /rm75_force_sensor/zero。
+- 清零后再做手推方向确认，暂时不要开启 Set_Force_Postion。
+
+排错 checklist
+--------------
+1. 连接失败：
+   - 检查机械臂是否上电。
+   - 检查电脑是否和机械臂同网段。
+   - 执行 ping 192.168.1.18。
+   - 检查端口是否为 8080。
+
+2. 编译找不到 rm_base.h：
+   - 检查 /home/ros/机械臂/rm_base_cmake_example/linux-x86/include/rm_base.h 是否存在。
+
+3. 运行找不到 libRM_Base.so.1.0.0：
+   - 当前 CMake 已设置 BUILD_RPATH。
+   - 如果仍失败，检查 /home/ros/机械臂/rm_base_cmake_example/linux-x86/lib/libRM_Base.so.1.0.0 是否存在。
+
+4. Get_Force_Data 一直失败：
+   - 确认实物是 RM75-6F 六维力版本。
+   - 确认控制器连接正常。
+   - 确认没有其他程序独占控制器连接。
+
+下一步
+------
+只读力传感器稳定后，再进入第二阶段：
+1. 用 /rm75_force_sensor/zero 清零。
+2. 手动推末端确认坐标符号。
+3. 写普通力位混合最小节点，先只开启 2N 工具 Z 方向力控。
+4. 最后再做擦桌子 x/y 轨迹 + z 方向力控。

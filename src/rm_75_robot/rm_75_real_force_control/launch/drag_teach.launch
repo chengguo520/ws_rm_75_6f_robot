@@ -1,0 +1,26 @@
+<launch>
+  <!-- Real RM75-6F drag teach controller.
+       Starting this launch does not enter drag mode unless auto_start=true. -->
+  <arg name="arm_ip" default="192.168.1.18" />
+  <arg name="arm_port" default="8080" />
+  <arg name="multi_drag_mode" default="1" />
+  <arg name="use_multi_drag" default="true" />
+  <arg name="fallback_to_basic_drag" default="true" />
+  <arg name="zero_force_before_start" default="true" />
+  <arg name="auto_start" default="false" />
+  <arg name="auto_stop_after_sec" default="0.0" />
+
+  <node pkg="rm_75_real_force_control"
+        type="rm75_drag_teach_node"
+        name="rm75_drag_teach_node"
+        output="screen">
+    <param name="arm_ip" value="$(arg arm_ip)" />
+    <param name="arm_port" value="$(arg arm_port)" />
+    <param name="multi_drag_mode" value="$(arg multi_drag_mode)" />
+    <param name="use_multi_drag" value="$(arg use_multi_drag)" />
+    <param name="fallback_to_basic_drag" value="$(arg fallback_to_basic_drag)" />
+    <param name="zero_force_before_start" value="$(arg zero_force_before_start)" />
+    <param name="auto_start" value="$(arg auto_start)" />
+    <param name="auto_stop_after_sec" value="$(arg auto_stop_after_sec)" />
+  </node>
+</launch>

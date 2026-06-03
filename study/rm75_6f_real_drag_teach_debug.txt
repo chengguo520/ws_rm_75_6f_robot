@@ -1,0 +1,143 @@
+RM75-6F 实物拖动示教调试
+========================
+
+实验目标
+--------
+- 验证厂家 API 的拖动示教能力是否能在 RM75-6F 实物上进入和退出。
+- 第一版只做进入/退出拖动示教，不复现轨迹，不发送 MoveJ/MoveL。
+- 默认使用复合拖动示教 mode=1：使用末端六维力，只动位置，姿态尽量不跟随。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 分支：feature/real-force-compliance
+- package：src/rm_75_robot/rm_75_real_force_control
+- 默认机械臂 IP：192.168.1.18
+- 默认端口：8080
+
+官方 API
+--------
+普通拖动示教：
+Start_Drag_Teach(sock, block)
+Stop_Drag_Teach(sock, block)
+
+复合模式拖动示教：
+Start_Multi_Drag_Teach(sock, mode, block)
+
+mode:
+0 = 电流环模式
+1 = 使用末端六维力，只动位置
+2 = 使用末端六维力，只动姿态
+3 = 使用末端六维力，位置和姿态同时动
+
+本实验默认使用：
+Start_Multi_Drag_Teach(sock, 1, RM_BLOCK)
+
+ROS 接口
+--------
+节点：
+rm75_drag_teach_node
+
+launch：
+roslaunch rm_75_real_force_control drag_teach.launch
+
+服务：
+/rm75_drag_teach/start
+  类型：std_srvs/Trigger
+  进入复合拖动示教
+
+/rm75_drag_teach/stop
+  类型：std_srvs/Trigger
+  退出拖动示教
+
+安全设计
+--------
+- 启动 launch 默认不会进入拖动示教，必须调用 /rm75_drag_teach/start。
+- start 前默认调用 Clear_Force_Data，要求末端静止、不接触外界。
+- start 前会尝试停止普通力位混合和透传力位混合，避免模式混用。
+- 节点析构时如果发现拖动示教仍处于 active，会自动调用 Stop_Drag_Teach。
+- 支持 auto_stop_after_sec，用于短时间安全测试。
+
+命令行操作
+----------
+编译：
+
+cd /home/ros/ws_rm_75_6f_robot
+catkin build rm_75_real_force_control
+source devel/setup.bash
+
+手动模式：
+
+roslaunch rm_75_real_force_control drag_teach.launch
+
+另开终端进入拖动示教：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosservice call /rm75_drag_teach/start
+
+退出拖动示教：
+
+rosservice call /rm75_drag_teach/stop
+
+限时测试模式：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10
+
+这条命令会自动进入拖动示教，10 秒后自动退出。
+
+如果复合模式 mode=1 返回失败，可尝试普通拖动示教：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+观察现象
+--------
+成功时：
+- start service 返回 success=true。
+- 机械臂进入可拖动状态。
+- 用手轻扶末端，可感觉位置方向更柔顺。
+- stop service 返回 success=true 后，机械臂退出拖动示教。
+
+注意：
+- 第一次不要大力拖拽。
+- 不要拖到关节限位或奇异位形附近。
+- 急停必须在手边。
+- 不要同时发送 MoveJ、MoveL、力位混合或透传轨迹命令。
+
+下一步
+------
+如果 mode=1 能稳定拖动：
+1. 记录拖动手感和是否只动位置。
+2. 尝试 mode=3，验证位置和姿态同时拖动。
+3. 再考虑拖动轨迹复现 Run_Drag_Trajectory。
+
+2026-06-03 首次复合拖动测试
+---------------------------
+命令：
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 multi_drag_mode:=1
+
+结果：
+- 已连接 192.168.1.18:8080。
+- Clear_Force_Data 成功。
+- Start_Multi_Drag_Teach(mode=1) 返回 1。
+
+判断：
+- 错误码 1 对应 CONTROLLER_DATE_RETURN_FALSE，即控制器返回 false。
+- 网络和 SDK 链路没有问题。
+- 下一步尝试普通 Start_Drag_Teach，排查是复合六维力模式条件不满足，还是拖动示教整体未开放。
+
+2026-06-03 普通拖动示教测试
+---------------------------
+命令：
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+结果：
+- 已连接 192.168.1.18:8080。
+- Clear_Force_Data 成功。
+- Start_Drag_Teach 返回成功。
+- 10 秒后 Stop_Drag_Teach 返回成功。
+
+判断：
+- 官方普通拖动示教功能可用。
+- 当前失败点只在 Start_Multi_Drag_Teach(mode=1) 复合六维力拖动示教。
+- 后续如果需要复合六维力拖动，需要检查示教器/控制器是否开启了复合拖动条件、六维力标定状态、当前控制器模式、固件版本或厂家资料中的额外限制。
