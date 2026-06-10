@@ -12,9 +12,16 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package()
 
 # This package intentionally uses the vendor C++ API directly instead of the
-# Gazebo/MoveIt simulation path. Keep the vendor SDK location configurable so the
-# real-robot branch can be moved without touching Gazebo packages.
-set(RM_BASE_SDK_DIR "/home/ros/机械臂/rm_base_cmake_example"
+# Gazebo/MoveIt simulation path. Prefer the vendored minimal SDK in this repo so
+# a fresh clone can build; fall back to the original local official package if a
+# developer has not checked in / pulled the vendored SDK files.
+set(DEFAULT_RM_BASE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../official/rm_base_cmake_example")
+if(NOT EXISTS "${DEFAULT_RM_BASE_SDK_DIR}/linux-x86/include/rm_base.h"
+   AND EXISTS "/home/ros/机械臂/rm_base_cmake_example/linux-x86/include/rm_base.h")
+  set(DEFAULT_RM_BASE_SDK_DIR "/home/ros/机械臂/rm_base_cmake_example")
+endif()
+
+set(RM_BASE_SDK_DIR "${DEFAULT_RM_BASE_SDK_DIR}"
     CACHE PATH "Path to the RealMan RM_Base C++ SDK example directory")
 set(RM_BASE_INCLUDE_DIR "${RM_BASE_SDK_DIR}/linux-x86/include")
 set(RM_BASE_LIBRARY "${RM_BASE_SDK_DIR}/linux-x86/lib/libRM_Base.so.1.0.0")
