@@ -1,0 +1,588 @@
+RM75-6F 项目 AI 学习上下文包
+============================
+
+用途
+----
+这个文件用于复制给另一个 AI，让它快速理解当前 RM75-6F 机械臂学习、仿真、实物连接、柔顺控制调试项目。
+
+它不是完整教程的替代品，而是“AI 接手说明书”：
+- 告诉 AI 当前项目是什么。
+- 告诉 AI 应该按什么学习顺序带人。
+- 告诉 AI 哪些文件、package、命令最重要。
+- 告诉 AI 哪些实物操作有风险，必须谨慎。
+- 告诉 AI 已经验证过什么，哪些还没有验证。
+
+完整人类学习指南请看：
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_from_zero_complete_learning_guide.txt
+
+
+一、可直接复制给 AI 的开场提示词
+===============================
+
+下面这段可以直接发给 AI：
+
+我正在学习和调试睿尔曼 RM75-6F 七轴机械臂，工作区在：
+/home/ros/ws_rm_75_6f_robot
+
+我希望你作为机器人 ROS 学习助手，带我从 0 开始理解这个项目，包括：
+1. 官方资料怎么读。
+2. ROS 工作区和各 package 的作用。
+3. RViz 中查看机器人模型。
+4. Gazebo + MoveIt 仿真启动和规划。
+5. MoveIt 控制仿真机械臂运动。
+6. 仿真中的导纳/柔顺控制实验。
+7. 连接实物 RM75-6F。
+8. 用 MoveIt/RViz 小幅、安全地控制实物机械臂。
+9. 读取实物六维力。
+10. 拖动示教。
+11. 官方力位混合柔顺控制接口。
+12. 后续为擦桌子、恒力接触等任务做准备。
+
+请你回答时遵守这些要求：
+- 先讲清楚当前步骤的目的，再给命令。
+- 每次实物操作前都提醒安全风险。
+- 不要一开始就让我运行大幅运动或高速度命令。
+- 区分 Gazebo 仿真和实物机械臂。
+- 区分 Gazebo action /arm/arm_joint_controller/follow_joint_trajectory 和实物 action /rm_75/follow_joint_trajectory。
+- 如果需要改代码，请说明改哪个文件、为什么改、如何验证。
+- 如果涉及柔顺控制，请解释导纳控制、阻抗控制、六维力、力位混合、坐标系、单位和限幅。
+
+当前项目的关键总指南是：
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_from_zero_complete_learning_guide.txt
+
+请先根据这个上下文，给我一个从 0 到实物柔顺控制的学习路线。
+
+
+二、项目基本信息
+================
+
+机械臂：
+睿尔曼 RM75-6F，七轴机械臂，带六维力相关能力。
+
+工作区：
+/home/ros/ws_rm_75_6f_robot
+
+当前主要分支：
+feature/real-force-compliance
+
+远程仓库：
+https://github.com/chengguo520/ws_rm_75_6f_robot.git
+
+主要学习笔记目录：
+/home/ros/ws_rm_75_6f_robot/study
+
+官方资料归档目录：
+/home/ros/ws_rm_75_6f_robot/official
+
+原始官方资料目录：
+/home/ros/机械臂
+
+
+三、官方资料应该怎么让 AI 带着学
+================================
+
+官方资料主要分三类：
+
+1. RM75 用户手册
+仓库归档：
+/home/ros/ws_rm_75_6f_robot/official/docs/realman_rm75_user_manual_v3_3.pdf
+
+让 AI 重点讲：
+- 机械臂安全注意事项。
+- 上电、急停、示教器。
+- 网络连接和 IP。
+- 坐标系、工具坐标系、基坐标系。
+- 基本运动和实物调试流程。
+
+2. C++ API 说明
+仓库归档：
+/home/ros/ws_rm_75_6f_robot/official/docs/realman_robot_cpp_api_v4_0_2.pdf
+
+让 AI 重点讲：
+- RM_API_Init
+- Arm_Socket_Start
+- MoveJ / MoveL / MoveC
+- Get_Current_Arm_State
+- Get_Force_Data
+- Clear_Force_Data
+- Start_Drag_Teach
+- Start_Multi_Drag_Teach
+- Set_Force_Postion
+- Stop_Force_Postion
+- Start_Force_Position_Move
+- Force_Position_Move_POSE
+- Force_Position_Move_Joint
+- Stop_Force_Postion_Move
+
+3. 厂家 Linux C++ SDK 示例
+仓库归档：
+/home/ros/ws_rm_75_6f_robot/official/rm_base_cmake_example
+
+让 AI 重点讲：
+- rm_base.h / rm_define.h 头文件。
+- libRM_Base.so.1.0.0 动态库。
+- CMake 如何链接厂家库。
+- 为什么实物力控包要优先使用仓库内 official/rm_base_cmake_example。
+
+
+四、ROS package 结构
+===================
+
+rm_75_6f_description
+  机器人模型、URDF/Xacro、固定两指夹爪、RViz 显示、Gazebo 模型。
+
+rm_75_gazebo
+  Gazebo 启动、world、ros_control 控制器、仿真 bringup。
+
+rm_75_moveit_config
+  MoveIt 配置、SRDF、controllers.yaml、controllers_gazebo.yaml、规划参数。
+
+rm_75_driver
+  连接真实机械臂控制器的 ROS driver。
+
+rm_75_control
+  实物轨迹控制桥接，把 MoveIt action 轨迹转换为驱动使用的 JointPos。
+
+rm_75_demo
+  仿真和实物演示脚本。
+  重要脚本包括：
+  - sim_01_scene_plan.py
+  - sim_02_vision_approach.py
+  - sim_03_gripper_pick.py
+  - sim_05_admittance_virtual_force.py
+  - sim_06_admittance_streaming_command.py
+  - sim_07_admittance_ik_position.py
+  - sim_08_admittance_jacobian_velocity.py
+  - real_single_joint_step.py
+  - real_wrist_small_step.py
+
+rm_75_real_force_control
+  实物六维力和拖动示教工具。
+  重要文件包括：
+  - src/rm75_force_read_only_node.cpp
+  - src/rm75_drag_teach_node.cpp
+  - launch/force_read_only.launch
+  - launch/drag_teach.launch
+  - CMakeLists.txt
+
+
+五、AI 应该带用户走的学习顺序
+=============================
+
+推荐顺序：
+
+1. 看官方用户手册，先理解安全和硬件。
+2. 看 C++ API 说明，先知道厂家提供了哪些底层能力。
+3. 编译工作区，确认 ROS 环境正常。
+4. 用 RViz 只显示模型，不动仿真也不动实物。
+5. 启动 Gazebo + MoveIt，在仿真里让机械臂运动。
+6. 学 MoveIt 规划和执行，理解 planning scene、collision object、trajectory action。
+7. 跑 sim_01 / sim_02 / sim_03，理解场景、视觉、抓取流程。
+8. 跑 sim_05 到 sim_08，理解导纳控制、IK、Jacobian、限幅。
+9. 连接实物机械臂，只做 ping 和 joint_states 检查。
+10. 用 MoveIt 对实物做小幅、低速关节运动。
+11. 读取六维力，学会清零和观察方向。
+12. 启动普通拖动示教，学会 start/stop。
+13. 再研究官方力位混合接口 Set_Force_Postion。
+14. 最后考虑低速接触、恒力、擦桌子等应用。
+
+
+六、最常用命令
+==============
+
+进入工作区：
+
+cd /home/ros/ws_rm_75_6f_robot
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+编译整个工作区：
+
+catkin build
+
+只编译实物力控包：
+
+catkin build rm_75_real_force_control
+
+RViz 只看模型：
+
+roslaunch rm_75_6f_description display.launch
+
+Gazebo + MoveIt：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+带桌子、方块、RGB-D 相机：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch \
+  world_name:=$(rospack find rm_75_gazebo)/worlds/rm75_table_cube.world \
+  use_rgbd_camera:=true
+
+检查 Gazebo 控制器：
+
+rostopic list | grep arm_joint_controller
+
+仿真导纳 Jacobian 速度实验：
+
+rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py
+
+检查仿真导纳状态：
+
+rostopic echo /rm75_admittance_jacobian/state
+
+检查实物网络：
+
+ping 192.168.1.18
+
+启动实物轨迹控制：
+
+roslaunch rm_75_control rm_75_control.launch
+
+启动实物 driver + MoveIt + RViz：
+
+roslaunch rm_75_bringup rm_robot.launch arm_ip:=192.168.1.18
+
+查看关节反馈：
+
+rostopic echo -n1 /joint_states
+
+查看实物 trajectory action：
+
+rostopic list | grep follow_joint_trajectory
+
+实物腕部小幅运动，先规划：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05
+
+实物腕部小幅运动，确认安全后执行：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05 --execute
+
+实物单关节小幅运动：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05 --execute
+
+读取六维力：
+
+roslaunch rm_75_real_force_control force_read_only.launch
+
+查看六维力 topic：
+
+rostopic echo /rm75_force_sensor/wrench
+
+六维力清零：
+
+rosservice call /rm75_force_sensor/zero
+
+启动普通拖动示教节点：
+
+roslaunch rm_75_real_force_control drag_teach.launch use_multi_drag:=false
+
+进入拖动示教：
+
+rosservice call /rm75_drag_teach/start
+
+退出拖动示教：
+
+rosservice call /rm75_drag_teach/stop
+
+限时 10 秒拖动示教测试：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+
+七、仿真和实物必须区分
+======================
+
+Gazebo 仿真控制链：
+
+MoveIt/RViz
+  -> /arm/arm_joint_controller/follow_joint_trajectory
+  -> ros_control
+  -> Gazebo RM75-6F
+
+实物控制链：
+
+MoveIt/RViz
+  -> /rm_75/follow_joint_trajectory
+  -> rm_75_control
+  -> /rm_driver/JointPos
+  -> rm_75_driver
+  -> TCP 192.168.1.18:8080
+  -> 实物机械臂
+  -> /joint_states
+  -> robot_state_publisher
+  -> RViz
+
+AI 在回答时必须提醒：
+- Gazebo action 是 /arm/arm_joint_controller/follow_joint_trajectory。
+- 实物 action 是 /rm_75/follow_joint_trajectory。
+- 不要把仿真命令和实物命令混在同一个解释里。
+- 不要让用户在不确认当前 launch 的情况下直接 Execute。
+
+
+八、柔顺控制概念解释要求
+========================
+
+AI 解释柔顺控制时，应按下面思路讲：
+
+1. 阻抗控制：
+   位置误差产生力。
+   更像“机械臂表现得像弹簧/阻尼/质量系统”。
+
+2. 导纳控制：
+   外力产生位移或速度。
+   当前 Gazebo 位置控制器更适合外层导纳控制。
+
+3. 六维力/力矩：
+   Fx、Fy、Fz 单位通常是 N。
+   Mx、My、Mz 单位通常是 Nm。
+   必须说明坐标系，是基坐标系还是工具坐标系。
+
+4. M/D/K：
+   M 是虚拟质量。
+   D 是虚拟阻尼。
+   K 是虚拟刚度。
+   参数过小或限幅不够会导致抖动、漂移或危险动作。
+
+5. 限幅：
+   必须限制最大位移、最大速度、最大关节步长、最大力。
+   实物第一轮应该使用极小速度、极小力、软接触。
+
+6. 力位混合：
+   位置方向仍由轨迹控制。
+   指定方向由底层保持或补偿力。
+   适合后续擦桌子：XY 走轨迹，Z 保持 2N 到 5N 小接触力。
+
+
+九、官方实物柔顺接口要点
+========================
+
+已重点整理的官方接口：
+
+1. Get_Force_Data
+   读取六维力数据。
+   当前已封装到 rm75_force_read_only_node。
+
+2. Clear_Force_Data
+   六维力清零。
+   当前通过 ROS service /rm75_force_sensor/zero 调用。
+
+3. Start_Drag_Teach
+   普通拖动示教。
+   当前已验证成功。
+
+4. Stop_Drag_Teach
+   停止拖动示教。
+   当前已验证成功。
+
+5. Start_Multi_Drag_Teach
+   复合六维力拖动示教。
+   当前 mode=1 返回 1，表示控制器拒绝，需要继续排查。
+
+6. Set_Force_Postion
+   官方普通力位混合接口。
+   注意官方函数名里是 Postion，不是 Position。
+
+   参数含义：
+   sensor:
+   0 = 一维力
+   1 = 六维力
+
+   mode:
+   0 = 基坐标系
+   1 = 工具坐标系
+
+   direction:
+   0 = X
+   1 = Y
+   2 = Z
+   3 = Rx
+   4 = Ry
+   5 = Rz
+
+   N:
+   单位是 0.1N。
+   20 = 2N。
+   50 = 5N。
+
+   推荐第一轮概念测试：
+   Set_Force_Postion(sock, 1, 1, 2, 20, RM_BLOCK)
+   含义：六维力、工具坐标系、Z 方向、2N。
+
+7. Stop_Force_Postion
+   停止普通力位混合。
+
+8. 透传力位混合：
+   Start_Force_Position_Move
+   Force_Position_Move_POSE
+   Force_Position_Move_Joint
+   Stop_Force_Postion_Move
+
+   注意：
+   Force_Position_Move_* 里的 force 单位是 N。
+   Set_Force_Postion 里的 N 单位是 0.1N。
+
+
+十、已经验证过的实物状态
+========================
+
+已经验证：
+- 能 ping 通 192.168.1.18。
+- 能编译 rm_75_real_force_control。
+- 能启动 force_read_only.launch。
+- 能连接实物控制器 192.168.1.18:8080。
+- 能读取六维力 Fx/Fy/Fz/Mx/My/Mz。
+- 能调用 /rm75_force_sensor/zero 清零。
+- 普通 Start_Drag_Teach 成功。
+- 普通 Stop_Drag_Teach 成功。
+- 10 秒 auto_start/auto_stop 拖动示教测试成功。
+
+尚未完整验证：
+- Start_Multi_Drag_Teach 复合六维力拖动示教。
+- Set_Force_Postion 普通力位混合 2N 软接触实验。
+- Force_Position_Move_* 透传力位混合。
+- 擦桌子恒力接触作业。
+
+
+十一、AI 回答实物操作时的安全规则
+================================
+
+AI 只要涉及实物运动，就必须提醒：
+
+1. 急停必须可触达。
+2. 机械臂周围不得有人、线缆、工具或障碍物。
+3. 第一次执行只做小幅运动。
+4. 速度和加速度先用 0.05。
+5. MoveIt 中先 Plan，再 Execute。
+6. 不要使用 random target 做实物第一次测试。
+7. 拖动示教必须知道 stop 命令。
+8. 力位混合必须知道 Stop_Force_Postion。
+9. 六维力清零要在末端静止、悬空、不接触外物时做。
+10. 实物柔顺接触第一轮只用 2N 级别小力，不做硬接触。
+
+
+十二、AI 可以采用的教学方式
+==========================
+
+推荐 AI 每次按这个格式回答：
+
+1. 当前目标
+   说明这一步要验证什么。
+
+2. 背景解释
+   简短解释 ROS 节点、topic、action、service 或厂家 API。
+
+3. 操作命令
+   给出可以复制运行的命令。
+
+4. 成功现象
+   说明用户应该看到什么输出、topic、RViz/Gazebo/实物现象。
+
+5. 排错
+   给出 3 到 5 个最可能的问题。
+
+6. 安全提示
+   如果涉及实物，必须单独列出。
+
+7. 下一步
+   告诉用户通过后学什么。
+
+
+十三、适合问 AI 的问题模板
+==========================
+
+学习 ROS 结构：
+请解释这个 RM75 工作区里 rm_75_6f_description、rm_75_gazebo、rm_75_moveit_config、rm_75_driver、rm_75_control 分别负责什么。
+
+学习仿真启动：
+请带我启动 Gazebo + MoveIt，并解释每个终端、每个 topic/action 的作用。
+
+学习 MoveIt：
+请解释为什么实物控制前要先在 RViz 里 Plan，再 Execute。
+
+学习导纳控制：
+请结合 sim_08_admittance_jacobian_velocity.py 解释导纳控制如何把外力变成末端速度。
+
+学习实物连接：
+请带我检查 RM75-6F 实物连接，包括 ping、joint_states、follow_joint_trajectory action。
+
+学习六维力：
+请解释 /rm75_force_sensor/wrench 中 Fx/Fy/Fz/Mx/My/Mz 的含义，以及什么时候需要清零。
+
+学习拖动示教：
+请解释 Start_Drag_Teach 和 Start_Multi_Drag_Teach 的区别，以及为什么当前普通拖动示教成功、复合拖动示教返回 1。
+
+学习力位混合：
+请解释 Set_Force_Postion(sock, 1, 1, 2, 20, RM_BLOCK) 每个参数是什么意思，以及为什么第一轮建议只用 2N。
+
+准备擦桌子：
+请设计一个安全的从仿真到实物的擦桌子恒力接触调试路线，先不要直接写实物运动代码。
+
+
+十四、重要学习笔记索引
+======================
+
+总指南：
+study/rm75_6f_from_zero_complete_learning_guide.txt
+
+实物 ROS / MoveIt：
+study/rm75_6f_real_robot_ros_notes.txt
+
+仿真抓取：
+study/rm75_6f_sim_experiments_guide.txt
+
+导纳柔顺：
+study/rm75_6f_admittance_virtual_force_experiment.txt
+study/rm75_6f_admittance_streaming_command_experiment.txt
+study/rm75_6f_admittance_ik_position_experiment.txt
+study/rm75_6f_admittance_jacobian_velocity_experiment.txt
+
+实物柔顺 API：
+study/rm75_6f_real_force_compliance_api_notes.txt
+study/rm75_6f_real_robot_compliance_operation_guide.txt
+
+实物六维力和拖动示教：
+study/rm75_6f_real_force_read_only_debug.txt
+study/rm75_6f_real_drag_teach_debug.txt
+
+实物柔顺学习计划：
+study/rm75_6f_real_compliance_learning_plan.txt
+
+实物力控代码讲解：
+study/rm75_6f_real_force_control_code_walkthrough.txt
+
+
+十五、AI 不应该做的事
+=====================
+
+AI 不应该：
+- 一上来就让用户执行实物大幅运动。
+- 把 Gazebo 仿真命令说成实物命令。
+- 把 /arm/arm_joint_controller/follow_joint_trajectory 和 /rm_75/follow_joint_trajectory 混淆。
+- 忽略急停、限速、限幅、清零条件。
+- 在未确认机械臂状态时建议高力接触。
+- 在未确认坐标系时解释力方向。
+- 把 Set_Force_Postion 的 N 单位误写成 N；它的单位是 0.1N。
+- 把 Force_Position_Move_* 的 force 单位误写成 0.1N；它的单位是 N。
+- 把当前尚未验证的力位混合实验说成已经完成。
+
+
+十六、最短总结
+==============
+
+这个项目的学习主线是：
+
+官方资料和安全
+  -> ROS 工作区结构
+  -> RViz 看模型
+  -> Gazebo + MoveIt 仿真运动
+  -> 仿真导纳柔顺
+  -> 实物连接和小幅运动
+  -> 六维力读取和清零
+  -> 普通拖动示教
+  -> 官方力位混合
+  -> 低速接触与擦桌子应用
+
+AI 的任务不是只给命令，而是每一步都帮学习者理解：
+为什么这样启动、数据怎么流、哪个 topic/action/service 在工作、成功现象是什么、失败怎么排查、实物风险在哪里。
