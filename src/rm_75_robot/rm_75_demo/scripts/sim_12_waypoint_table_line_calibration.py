@@ -335,9 +335,9 @@ def parse_args(argv):
         default=0.080,
         help="Lower the MoveIt collision tabletop below the virtual/Gazebo surface, m.",
     )
-    parser.add_argument("--table-center-x-offset", type=float, default=0.15)
+    parser.add_argument("--table-center-x-offset", type=float, default=0.23)
     parser.add_argument("--table-center-y-offset", type=float, default=0.0)
-    parser.add_argument("--table-size-x", type=float, default=0.82, help="Use <=0 to derive from line length.")
+    parser.add_argument("--table-size-x", type=float, default=0.76, help="Use <=0 to derive from line length.")
     parser.add_argument("--table-size-y", type=float, default=0.44)
     parser.add_argument("--table-size-z", type=float, default=0.05)
     parser.add_argument("--table-margin-x", type=float, default=0.12)

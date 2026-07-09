@@ -16,9 +16,10 @@
       the visible top surface is z=0.366 m. The controller scripts that work in
       base_link use z=0.336 m because dummy -> base_link is a fixed +0.030 m.
 
-      The visible table body is shifted forward in +X relative to the saved
-      short wiping line, so the robot-side edge is not tucked against the arm
-      and there is more room for a longer future wiping stroke.
+      The visible table body is shifted forward in +X relative to the wiping
+      line, so the robot-side edge is not tucked against the lower arm. With the
+      current dimensions the near edge is about x=0.26 m while the long wiping
+      stroke starts around x=0.32 m.
 
       The current controller still uses a mathematical virtual normal force
       instead of Gazebo contact feedback. This world makes the surface visible
@@ -28,12 +29,12 @@
     -->
     <model name="bumpy_wiping_table">
       <static>true</static>
-      <pose>0.560 0.026 0.341 0 0 0</pose>
+      <pose>0.640 0.026 0.341 0 0 0</pose>
       <link name="table_link">
         <visual name="table_visual">
           <geometry>
             <box>
-              <size>0.82 0.44 0.05</size>
+              <size>0.76 0.44 0.05</size>
             </box>
           </geometry>
           <material>
@@ -45,7 +46,7 @@
       </link>
     </model>
 
-    <!-- Blue straight wiping lane: sim_09 moves link7 slowly along this x-direction line. -->
+    <!-- Blue straight wiping lane: sim_09 now uses a longer 18 cm stroke on this x-direction line. -->
     <model name="wiping_lane">
       <static>true</static>
       <pose>0.410 0.026 0.369 0 0 0</pose>
@@ -53,7 +54,7 @@
         <visual name="lane_visual">
           <geometry>
             <box>
-              <size>0.24 0.08 0.004</size>
+              <size>0.24 0.09 0.004</size>
             </box>
           </geometry>
           <material>
@@ -65,21 +66,26 @@
       </link>
     </model>
 
-    <!-- Small visible bump aligned with sim_09 default bump_x_offset=-0.018 m. -->
-    <model name="virtual_bump_patch">
+    <!--
+      Visual-only smooth sine-squared wave surface for x_wave mode.
+      This DAE mesh is a continuous ribbon: two smooth raised humps with a
+      low valley between them. It is deliberately visual-only; sim_09 computes
+      the matching virtual height field and force in code.
+    -->
+    <model name="smooth_wave_surface">
       <static>true</static>
-      <pose>0.392 0.026 0.372 0 0 0</pose>
-      <link name="bump_link">
-        <visual name="bump_visual">
+      <pose>0.410 0.026 0.366 0 0 0</pose>
+      <link name="wave_link">
+        <visual name="wave_surface_visual">
           <geometry>
-            <cylinder>
-              <radius>0.035</radius>
-              <length>0.012</length>
-            </cylinder>
+            <mesh>
+              <uri>file:///home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/meshes/smooth_wave_surface.dae</uri>
+            </mesh>
           </geometry>
           <material>
-            <ambient>0.92 0.30 0.12 1.0</ambient>
-            <diffuse>0.98 0.34 0.14 1.0</diffuse>
+            <ambient>1.00 0.45 0.05 0.92</ambient>
+            <diffuse>1.00 0.38 0.06 0.92</diffuse>
+            <specular>0.08 0.08 0.08 1.0</specular>
           </material>
         </visual>
       </link>

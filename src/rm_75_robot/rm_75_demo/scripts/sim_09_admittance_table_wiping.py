@@ -17,8 +17,8 @@ RM75-6F Gazebo sim_09：慢速桌面擦拭 + z 单轴导纳验证。
 为什么先做这个实验：
     sim_08 已经证明 Jacobian 速度导纳能让机械臂真实运动。
     sim_09 默认先进入最小 x_line 慢速桌面擦拭：固定一条 x 方向直线，
-    y 固定，z 方向根据虚拟桌面高度做单轴导纳反馈。x_bump 凸起模式
-    保留为第二步验证。
+    y 固定，z 方向根据虚拟桌面高度做单轴导纳反馈。x_bump 单凸起和
+    x_wave 平滑起伏曲面模式用于观察更明显的柔顺退让。
 
 Gazebo 中可以用 arm_75_bumpy_wiping_moveit.launch 载入可见桌子和凸起；
 当前反馈仍来自数学虚拟力场，而不是真实 Gazebo 接触力。后续接触传感器
@@ -56,6 +56,10 @@ DEFAULT_PREPARE_JOINTS = [-0.000107, 0.185648, 0.109322, 1.316919, -0.076408, 0.
 DEFAULT_TABLE_CENTER_X = 0.410
 DEFAULT_TABLE_CENTER_Y = 0.026
 DEFAULT_TABLE_SURFACE_Z = 0.336
+DEFAULT_VISUAL_TABLE_CENTER_X = 0.640
+DEFAULT_VISUAL_TABLE_CENTER_Y = 0.026
+DEFAULT_VISUAL_TABLE_SIZE_X = 0.760
+DEFAULT_VISUAL_TABLE_SIZE_Y = 0.440
 
 COMMAND_TOPIC = "/arm/arm_joint_controller/command"
 DEFAULT_JOINT_STATES_TOPIC = "/arm/joint_states"
@@ -108,6 +112,10 @@ def max_abs(values):
     if not values:
         return 0.0
     return max(abs(v) for v in values)
+
+
+def bounds_margin(inner_min, inner_max, outer_min, outer_max):
+    return min(inner_min - outer_min, outer_max - inner_max)
 
 
 def error_name(error_code):
@@ -366,6 +374,25 @@ def spatial_gaussian_bump(x, y, center_x, center_y, height, sigma_x, sigma_y):
     return max(0.0, height) * math.exp(-0.5 * (dx * dx + dy * dy))
 
 
+def spatial_wave_surface(x, y, center_x, center_y, height, cycles, line_length, sigma_y):
+    """平滑正弦平方曲面高度场。
+
+    x_wave 模式使用 sin^2 曲面，而不是离散方块或硬台阶：
+      - 整条线从基准桌面平滑升起、落下、再升起；
+      - surface_step 永远非负，视觉上像桌面上铺了一条连续波浪垫；
+      - Gazebo 里的 DAE 网格只是这条数学曲面的视觉版本，不参与接触。
+
+    这里仍是虚拟力场，不是真实 Gazebo 接触力。
+    """
+    height = max(0.0, height)
+    line_length = max(0.001, abs(line_length))
+    sigma_y = max(0.001, abs(sigma_y))
+    cycles = max(0.25, abs(cycles))
+    s = clamp((x - center_x) / line_length + 0.5, 0.0, 1.0)
+    y_gain = math.exp(-0.5 * (((y - center_y) / sigma_y) ** 2))
+    return height * (math.sin(math.pi * cycles * s) ** 2) * y_gain
+
+
 def virtual_contact_force(surface_z, tcp_z, tcp_vz, stiffness, damping, max_force):
     """由虚拟桌面高度和 TCP 压入量计算法向力。
 
@@ -516,6 +543,7 @@ def publish_visual_markers(
       - 黄色半透明块：虚拟擦拭 pad；
       - 蓝色半透明平面：虚拟桌面高度；
       - 红色半透明凸起：x_bump 模式中的空间凸起；
+      - 橙色曲线：x_wave 模式中的平滑起伏曲面轮廓；
       - 白色线：x 方向擦拭路径；
       - 紫色线：link7 到 TCP 的虚拟工具偏移。
     """
@@ -593,6 +621,73 @@ def publish_visual_markers(
             lifetime=lifetime,
         ))
 
+    if mode == "x_wave":
+        profile_points = []
+        sample_count = 36
+        start_x = hold_xy[0] - args.line_length * 0.5
+        end_x = hold_xy[0] + args.line_length * 0.5
+        for i in range(sample_count + 1):
+            ratio = float(i) / float(sample_count)
+            x = start_x + (end_x - start_x) * ratio
+            step = spatial_wave_surface(
+                x,
+                hold_xy[1] + args.line_y_offset,
+                hold_xy[0],
+                hold_xy[1] + args.line_y_offset,
+                args.wave_height,
+                args.wave_cycles,
+                args.line_length,
+                args.wave_sigma_y,
+            )
+            profile_points.append([x, hold_xy[1] + args.line_y_offset, base_surface_z + step + 0.012])
+        markers.markers.append(make_line_marker(
+            9,
+            frame_id,
+            "wave_profile",
+            profile_points,
+            0.010,
+            [1.0, 0.45, 0.05, 0.95],
+            lifetime=lifetime,
+        ))
+        markers.markers.append(make_marker(
+            10,
+            Marker.SPHERE,
+            frame_id,
+            "wave_first_peak",
+            [hold_xy[0] - args.line_length * 0.25, hold_xy[1] + args.line_y_offset, base_surface_z + args.wave_height],
+            [0.020, 0.020, 0.020],
+            [1.0, 0.25, 0.05, 0.8],
+            lifetime=lifetime,
+        ))
+        markers.markers.append(make_marker(
+            14,
+            Marker.SPHERE,
+            frame_id,
+            "wave_middle_valley",
+            [hold_xy[0], hold_xy[1] + args.line_y_offset, base_surface_z],
+            [0.018, 0.018, 0.018],
+            [0.05, 0.75, 1.0, 0.8],
+            lifetime=lifetime,
+        ))
+        markers.markers.append(make_marker(
+            15,
+            Marker.SPHERE,
+            frame_id,
+            "wave_second_peak",
+            [hold_xy[0] + args.line_length * 0.25, hold_xy[1] + args.line_y_offset, base_surface_z + args.wave_height],
+            [0.020, 0.020, 0.020],
+            [1.0, 0.35, 0.05, 0.8],
+            lifetime=lifetime,
+        ))
+        markers.markers.append(make_text_marker(
+            16,
+            frame_id,
+            "labels",
+            [hold_xy[0], hold_xy[1] + args.line_y_offset, base_surface_z + args.wave_height + 0.055],
+            "smooth wave",
+            lifetime=lifetime,
+        ))
+
     markers.markers.append(make_marker(
         8,
         Marker.CUBE,
@@ -608,7 +703,7 @@ def publish_visual_markers(
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="RM75-6F sim_09: slow table wiping with z-axis admittance.")
-    parser.add_argument("--mode", default="x_line", choices=["z_probe", "x_line", "x_bump"])
+    parser.add_argument("--mode", default="x_line", choices=["z_probe", "x_line", "x_bump", "x_wave"])
     parser.add_argument("--duration", type=float, default=60.0)
     parser.add_argument("--rate", type=float, default=30.0)
     parser.add_argument("--command-horizon", type=float, default=0.16)
@@ -635,7 +730,7 @@ def parse_args(argv):
     parser.add_argument("--step-height", type=float, default=0.0)
     parser.add_argument("--step-ramp", type=float, default=2.0)
 
-    parser.add_argument("--line-length", type=float, default=0.080, help="x_line mode wiping length in x direction, m.")
+    parser.add_argument("--line-length", type=float, default=0.180, help="x_line/x_wave wiping length in x direction, m.")
     parser.add_argument("--line-speed", type=float, default=0.004, help="x_line mode feed-forward x speed, m/s.")
     parser.add_argument("--line-center-x", type=float, default=DEFAULT_TABLE_CENTER_X, help="Wiping line center x in base_link, m.")
     parser.add_argument("--line-center-y", type=float, default=DEFAULT_TABLE_CENTER_Y, help="Wiping line center y in base_link, m.")
@@ -643,12 +738,24 @@ def parse_args(argv):
     parser.add_argument("--min-x-motion", type=float, default=0.025, help="x_line pass threshold for link x span, m.")
     parser.add_argument("--max-initial-xy-error", type=float, default=0.35, help="Warn if initial link7 xy is farther than this from the fixed wiping line center, m.")
     parser.add_argument("--max-initial-z-gap", type=float, default=0.12, help="Warn if initial virtual TCP is farther than this from surface_z, m.")
+    parser.add_argument("--visual-table-center-x", type=float, default=DEFAULT_VISUAL_TABLE_CENTER_X)
+    parser.add_argument("--visual-table-center-y", type=float, default=DEFAULT_VISUAL_TABLE_CENTER_Y)
+    parser.add_argument("--visual-table-size-x", type=float, default=DEFAULT_VISUAL_TABLE_SIZE_X)
+    parser.add_argument("--visual-table-size-y", type=float, default=DEFAULT_VISUAL_TABLE_SIZE_Y)
+    parser.add_argument("--min-table-edge-margin", type=float, default=0.030, help="Warn if the commanded line is closer than this to the visual table edge, m.")
 
     parser.add_argument("--bump-height", type=float, default=0.010, help="x_bump spatial bump height, m.")
     parser.add_argument("--bump-x-offset", type=float, default=-0.018, help="x_bump center offset from initial x, m.")
     parser.add_argument("--bump-y-offset", type=float, default=0.0, help="x_bump center offset from line center y, m.")
     parser.add_argument("--bump-sigma-x", type=float, default=0.012, help="x_bump Gaussian sigma in x, m.")
     parser.add_argument("--bump-sigma-y", type=float, default=0.060, help="x_bump Gaussian sigma in y, m.")
+
+    parser.add_argument("--wave-height", type=float, default=0.014, help="x_wave peak height above the base virtual surface, m.")
+    parser.add_argument("--wave-cycles", type=float, default=2.0, help="x_wave sin^2 cycles along one line_length.")
+    parser.add_argument("--wave-dip-ratio", type=float, default=0.65, help="Deprecated compatibility option; x_wave now uses non-negative sin^2 valleys.")
+    parser.add_argument("--wave-spacing", type=float, default=0.055, help="x_wave distance from center dip to each peak, m.")
+    parser.add_argument("--wave-sigma-x", type=float, default=0.020, help="x_wave Gaussian sigma along x, m.")
+    parser.add_argument("--wave-sigma-y", type=float, default=0.060, help="x_wave Gaussian sigma along y, m.")
 
     parser.add_argument("--normal-mass", type=float, default=1.2)
     parser.add_argument("--normal-damping", type=float, default=75.0)
@@ -780,6 +887,16 @@ def main():
     initial_z_gap = initial_tcp_z - base_surface_z
     line_start = [hold_xy[0] - args.line_length * 0.5, hold_xy[1] + args.line_y_offset]
     line_end = [hold_xy[0] + args.line_length * 0.5, hold_xy[1] + args.line_y_offset]
+    table_min_x = args.visual_table_center_x - args.visual_table_size_x * 0.5
+    table_max_x = args.visual_table_center_x + args.visual_table_size_x * 0.5
+    table_min_y = args.visual_table_center_y - args.visual_table_size_y * 0.5
+    table_max_y = args.visual_table_center_y + args.visual_table_size_y * 0.5
+    line_min_x = min(line_start[0], line_end[0])
+    line_max_x = max(line_start[0], line_end[0])
+    line_min_y = line_path.center_y - 0.5 * 0.09
+    line_max_y = line_path.center_y + 0.5 * 0.09
+    table_margin_x = bounds_margin(line_min_x, line_max_x, table_min_x, table_max_x)
+    table_margin_y = bounds_margin(line_min_y, line_max_y, table_min_y, table_max_y)
 
     print("RM75-6F sim_09 slow table wiping admittance")
     print("Mode:                 ", args.mode)
@@ -795,6 +912,10 @@ def main():
     print("Initial TCP z:        ", "{:.4f}".format(initial_tcp_z))
     print("Hold xy:              ", fmt(hold_xy))
     print("Line start/end xy:    ", "{} -> {}".format(fmt(line_start), fmt(line_end)))
+    print("Visual table x/y:     ", "[{:.3f}, {:.3f}] / [{:.3f}, {:.3f}]".format(
+        table_min_x, table_max_x, table_min_y, table_max_y
+    ))
+    print("Line edge margin x/y: ", "{:.3f}m / {:.3f}m".format(table_margin_x, table_margin_y))
     print("Initial line xy err:  ", "{:.4f}m".format(initial_xy_error))
     print("Initial TCP-surface:  ", "{:.4f}m".format(initial_z_gap))
     print("Initial min singular: ", "{:.5f}".format(initial_min_singular))
@@ -803,9 +924,13 @@ def main():
     print("Bump height/sigma:    ", "{:.4f}m / [{:.4f}, {:.4f}]m".format(
         args.bump_height, args.bump_sigma_x, args.bump_sigma_y
     ))
+    print("Wave peak x:          ", fmt([hold_xy[0] - args.line_length * 0.25, hold_xy[0] + args.line_length * 0.25]))
+    print("Wave height/cycles:   ", "{:.4f}m / {:.2f}".format(args.wave_height, args.wave_cycles))
+    print("Wave sigma y:         ", "{:.4f}m".format(args.wave_sigma_y))
     print("Base surface z:       ", "{:.4f}".format(base_surface_z))
     print("TCP z limits:         ", "[{:.4f}, {:.4f}]".format(min_tcp_z, max_tcp_z))
     print("Desired normal force: ", args.desired_normal_force)
+    print("Desired penetration:  ", "{:.4f}m".format(desired_penetration))
     print("Temporal step:        ", "start={:.2f}s duration={:.2f}s height={:.4f}m".format(
         args.step_start, args.step_duration, args.step_height
     ))
@@ -832,6 +957,12 @@ def main():
         rospy.logwarn(
             "Initial link7 local Z axis is not facing down enough: down_score=%.3f. Use --prepare or adjust prepare joints.",
             initial_tool_down_score,
+        )
+    if table_margin_x < args.min_table_edge_margin or table_margin_y < args.min_table_edge_margin:
+        rospy.logwarn(
+            "Commanded wiping line is close to or outside the visual table: margin_x=%.3fm margin_y=%.3fm. Reduce --line-length or adjust the line/table center.",
+            table_margin_x,
+            table_margin_y,
         )
 
     start_time = rospy.Time.now()
@@ -880,6 +1011,18 @@ def main():
                 args.bump_sigma_x,
                 args.bump_sigma_y,
             )
+        elif args.mode == "x_wave":
+            surface_source = "spatial_wave"
+            surface_step = spatial_wave_surface(
+                link_xyz[0],
+                link_xyz[1],
+                hold_xy[0],
+                line_path.center_y,
+                args.wave_height,
+                args.wave_cycles,
+                args.line_length,
+                args.wave_sigma_y,
+            )
         elif args.step_height <= 0.0:
             # 默认 x_line 只做固定桌面上的直线擦拭；不额外叠加时间台阶，
             # 这样先把“沿桌面一个方向运动”这件事看清楚。
@@ -895,6 +1038,8 @@ def main():
                 args.step_ramp,
             )
         surface_z = base_surface_z + surface_step
+        equilibrium_tcp_z = surface_z - desired_penetration
+        tcp_equilibrium_error = tcp_z - equilibrium_tcp_z
         contact_force, penetration = virtual_contact_force(
             surface_z,
             tcp_z,
@@ -914,14 +1059,14 @@ def main():
         if elapsed < args.settle_time:
             xy_ref = list(hold_xy)
             xy_ref_velocity = [0.0, 0.0]
-        elif args.mode in ["x_line", "x_bump"]:
+        elif args.mode in ["x_line", "x_bump", "x_wave"]:
             xy_ref, xy_ref_velocity = line_path.sample(motion_elapsed)
         else:
             xy_ref = list(hold_xy)
             xy_ref_velocity = [0.0, 0.0]
 
-        # z_probe 模式下 x/y 只是保持；x_line/x_bump 模式下 x 加入慢速往复参考，
-        # y 仍然固定。这样每次只新增一个自由度，便于定位问题。
+        # z_probe 模式下 x/y 只是保持；x_line/x_bump/x_wave 模式下 x 加入
+        # 慢速往复参考，y 仍然固定。这样每次只新增一个自由度，便于定位问题。
         vx = xy_ref_velocity[0] + args.xy_hold_gain * (xy_ref[0] - link_xyz[0])
         vy = xy_ref_velocity[1] + args.xy_hold_gain * (xy_ref[1] - link_xyz[1])
         vx = clamp(vx, -args.max_xy_velocity, args.max_xy_velocity)
@@ -981,7 +1126,8 @@ def main():
         state_text = (
             "elapsed={:.2f} mode={} xy_ref={} link_xyz={} link7_z_axis={} tool_down_score={:.4f} "
             "tcp_z={:.4f} base_surface_z={:.4f} "
-            "surface_source={} surface_step={:.4f} surface_z={:.4f} bump_center={} penetration={:.4f} "
+            "surface_source={} surface_step={:.4f} surface_z={:.4f} eq_tcp_z={:.4f} tcp_eq_err={:.4f} "
+            "bump_center={} penetration={:.4f} "
             "fz_virtual_N={:.3f} desired_fz_N={:.3f} force_error_N={:.3f} "
             "vz_raw={:.4f} vz_admittance={:.4f} tcp_limit={} cartesian_velocity={} "
             "xy_error={:.4f} qdot_max={:.4f} min_singular={:.5f} joint_error_max={:.4f}"
@@ -997,6 +1143,8 @@ def main():
             surface_source,
             surface_step,
             surface_z,
+            equilibrium_tcp_z,
+            tcp_equilibrium_error,
             fmt(bump_center),
             penetration,
             contact_force,
@@ -1015,11 +1163,12 @@ def main():
 
         rospy.loginfo_throttle(
             max(0.1, args.log_period),
-            "mode=%s x=%.4f x_ref=%.4f tcp_z=%.4f down=%.3f step=%.4f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
+            "mode=%s x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
             args.mode,
             link_xyz[0],
             xy_ref[0],
             tcp_z,
+            tcp_equilibrium_error,
             tool_down_score,
             surface_step,
             surface_source,
@@ -1064,7 +1213,7 @@ def main():
                 rospy.loginfo("PASS: fixed x-line wiping produced visible TCP x motion.")
             else:
                 rospy.logwarn("WARN: fixed x-line wiping did not reach expected x motion; check line center, speed, and singularity.")
-        elif args.mode in ["x_line", "x_bump"]:
+        elif args.mode in ["x_line", "x_bump", "x_wave"]:
             if tcp_span >= args.min_tcp_motion and x_span >= args.min_x_motion:
                 rospy.loginfo("PASS: x wiping and z-axis admittance both produced visible TCP motion.")
             else:

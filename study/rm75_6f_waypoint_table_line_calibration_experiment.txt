@@ -30,12 +30,13 @@ cazhuozi2（tcp_pose.frame_id = dummy）：
 - 当前虚拟 TCP 假设：tcp_z = link7_z - 0.040。
 - 推导 Gazebo/world 可视桌面高度：surface_z = 0.3663 m，坐标系是 dummy/world。
 - dummy -> base_link 是固定 +0.030 m，所以 sim_09 这种按 base_link 计算 TF 的脚本应使用 surface_z = 0.3363 m。
-- Gazebo 可视桌子中心：[0.5598, 0.0264, 0.3413]。
-- 桌子主体相对擦拭短线向 +X 前方移动 0.150 m，给后续加长擦拭线预留空间。
+- Gazebo 可视桌子中心：[0.6398, 0.0264, 0.3413]。
+- 桌子主体相对擦拭短线向 +X 前方移动 0.230 m，让靠机器人侧桌边远离机械臂下部连杆。
 - MoveIt collision 桌面为了避免接触点位被硬碰撞判失败，下沉 0.080 m，collision top z = 0.2863 m。
-- MoveIt collision 桌子中心：[0.5598, 0.0264, 0.2613]。
-- 桌子尺寸：[0.8200, 0.4400, 0.0500]。
-- 按 x 方向估算，桌面覆盖约 x = [0.150, 0.970] m；当前擦拭短线 x = [0.369, 0.451] m，仍在桌面上。
+- MoveIt collision 桌子中心：[0.6398, 0.0264, 0.2613]。
+- 桌子尺寸：[0.7600, 0.4400, 0.0500]。
+- 按 x 方向估算，桌面覆盖约 x = [0.260, 1.020] m；当前擦拭短线 x = [0.369, 0.451] m，仍在桌面上。
+- 后续 sim_09 的 18 cm 长擦拭线 x = [0.320, 0.500] m，距离靠机器人侧桌边还有约 0.060 m；桌边本身比旧版 x=0.150 后退到 x=0.260，降低下部连杆视觉擦碰桌边的风险。
 
 相关脚本
 --------
@@ -159,9 +160,9 @@ rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --go-start --plan-li
   Gazebo/world 可视桌面 top z = 0.366
 - sim_12 MoveIt 桌面标定：
   surface_z = 0.336（base_link 坐标系）
-  table_center_x = 0.560
+  table_center_x = 0.640
   table_center_y = 0.026
-  table_size_x = 0.820
+  table_size_x = 0.760
 - sim_09 z 轴导纳擦拭：
   surface_z = 0.336（base_link 坐标系）
   line_center_x = 0.410

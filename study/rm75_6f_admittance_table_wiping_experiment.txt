@@ -3,9 +3,9 @@ RM75-6F sim_09：固定直线擦拭 + z 单轴导纳验证
 
 实验目标
 --------
-- 默认运行 x_line 慢速擦拭：先固定一条 x 方向直线，y 固定，z 方向根据虚拟桌面法向力上下柔顺。
-- Gazebo 世界中直接放入可见桌面、擦拭线和小凸起，避免只看机械臂运动却不知道它在“擦哪里”。
-- 保留 z_probe 和 x_bump 模式，方便回退验证单轴导纳，或第二步验证经过凸起。
+- 默认一键演示运行 x_wave 慢速擦拭：沿更长的 x 方向直线往复，y 固定，z 方向根据平滑正弦平方虚拟曲面上下柔顺。
+- Gazebo 世界中直接放入可见桌面、长擦拭线和平滑正弦曲面网格，避免只看机械臂运动却不知道它在“擦哪里”。
+- 保留 z_probe、x_line、x_bump 模式，方便回退验证单轴导纳、固定直线擦拭或单凸起擦拭。
 - 当前力反馈仍是虚拟力场，不是真实 Gazebo 接触力；后续再接 Gazebo contact/force sensor 或真实六维力传感器。
 
 这次为什么先不做完整擦桌子
@@ -13,9 +13,10 @@ RM75-6F sim_09：固定直线擦拭 + z 单轴导纳验证
 - sim_10 已经证明：/arm/arm_joint_controller/command 能驱动 Gazebo 关节，/arm/joint_states 会真实变化。
 - sim_08 已经证明：导纳速度 -> Jacobian -> q_dot -> 关节命令这条链路能稳定运行。
 - z_probe 模式已经用于验证：TCP/contact_z、虚拟桌面高度、法向力、z 导纳之间能闭成一个稳定小环。
-- x_line 模式：作为当前默认步骤，只加入 x 方向慢速往复，y 仍固定，z 仍沿用同一套导纳。
+- x_line 模式：只加入 x 方向慢速往复，y 仍固定，z 仍沿用同一套导纳。
 - x_bump 模式：在 x_line 的基础上，把时间台阶换成空间高度场 surface_z = height(x, y)。
-- x_bump 是第二步“在可见桌面上擦过虚拟凸起”的实验，不再作为默认第一步。
+- x_wave 模式：在更长直线上使用正弦平方曲面，形成两个平滑凸起和一个中间低谷，让视觉和数据里的 z 方向柔顺更明显。
+- 当前一键演示默认使用 x_wave；x_line 和 x_bump 仍作为对照实验保留。
 
 Gazebo 桌面和反馈关系
 --------------------
@@ -24,7 +25,10 @@ Gazebo 桌面和反馈关系
 - 专用启动文件：
   /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/launch/arm_75_bumpy_wiping_moveit.launch
 - 桌面顶面大约在 z = 0.366 m，擦拭线中心大约在 x = 0.410 m, y = 0.026 m。
-- Gazebo 可视桌子主体中心已前移到 x = 0.560 m、尺寸 x = 0.820 m；当前短擦拭线仍在桌面靠机器人一侧，后续可以继续向 +X 拉长。
+- Gazebo 可视桌子主体中心已前移到 x = 0.640 m、尺寸 x = 0.760 m。
+- 这样桌子靠机器人侧边缘从旧版约 x = 0.150 m 后退到约 x = 0.260 m，避免机械臂下部连杆视觉上擦到桌子近端边。
+- 旧版擦拭线长度是 0.080 m，也就是 8 cm。
+- 当前 x_wave 一键演示把擦拭线长度加到 0.180 m，也就是 18 cm，范围大约 x = [0.320, 0.500] m，仍在桌面范围内。
 - 这组位置来自示教器保存点 cazhuozi1 -> cazhuozi2：link7 约在 z=0.406 m，按 tool_offset_z=0.040 推导虚拟 TCP/桌面约在 0.366 m。
 - 之前直接从零位启动时，link7 局部 Z 轴几乎朝上，min_singular 接近 0，机械臂是在奇异姿态附近拖着法兰去找桌面，不是真正擦拭姿态。
 - Gazebo 桌面负责视觉对齐；sim_09 的 z 导纳反馈仍由 surface_z、tcp_z、penetration 计算得到。
@@ -69,10 +73,11 @@ ROS 框架关系
    - 用 Jacobian DLS 把 [vx, vy, vz, 0, 0, 0] 转成 q_dot。
    - 从 q_last_commanded 继续积分得到 q_des。
    - 发布 /arm/arm_joint_controller/command。
-   - 支持三个模式：
+   - 支持四个模式：
      z_probe：x/y 小幅保持，只验证 z 单轴导纳。
      x_line：x 慢速直线往复，y 固定，z 继续单轴导纳。
      x_bump：x 慢速直线往复，y 固定，z 导纳响应空间高斯凸起。
+     x_wave：x 长直线往复，y 固定，z 导纳响应平滑正弦曲面。
 
 关键 topic：
 
@@ -109,12 +114,12 @@ ROS 框架关系
   -> TF(base_link -> link7)
   -> link7_z
   -> tcp_z = link7_z - tool_offset_z
-  -> surface_z = base_surface_z + smooth_step(t) 或 height(x, y)
+  -> surface_z = base_surface_z + smooth_step(t)、single bump(x, y) 或 wave(x, y)
   -> penetration = surface_z - tcp_z
   -> fz_virtual = K_surface * penetration - D_surface * tcp_vz
   -> z 单轴导纳 M * z_ddot + D * z_dot = fz_virtual - desired_fz
   -> vz_admittance
-  -> x/y 小幅保持、x_line 慢速往复或 x_bump 擦过空间凸起 + z 导纳速度
+  -> x/y 小幅保持、x_line 慢速往复、x_bump 单凸起或 x_wave 凹凸曲面 + z 导纳速度
   -> Jacobian DLS 计算 q_dot
   -> q_des = q_last_commanded + q_dot * dt
   -> /arm/arm_joint_controller/command
@@ -142,6 +147,19 @@ surface_z = base_surface_z + surface_step(t)
 surface_step = bump_height * exp(-0.5 * ((x - bump_x) / sigma_x)^2 - 0.5 * ((y - bump_y) / sigma_y)^2)
 
 也就是说，只有当 TCP/link 运动到凸起附近时，虚拟桌面才会升高。
+
+在 x_wave 模式中，surface_step 来自一条正弦平方曲面：
+
+s = clamp((x - center_x) / line_length + 0.5, 0, 1)
+surface_step = wave_height * sin(pi * wave_cycles * s)^2 * y_gain
+
+默认参数：
+- wave_height = 0.014 m，凸起高度约 14 mm。
+- wave_cycles = 2.0，18 cm 线段上出现两个平滑凸峰。
+- wave_sigma_y = 0.060 m，控制离开擦拭线 y 方向后的衰减。
+
+这个曲面是连续的正弦函数，不是硬台阶，也不是一格一格的方块。
+Gazebo 里使用 smooth_wave_surface.dae 做可视网格；它不参与碰撞，只和 sim_09 里的数学曲面对齐。
 
 默认 base_surface_z 固定为当前标定工作桌面高度 0.366 m，和 Gazebo 视觉桌面一致。
 
@@ -182,8 +200,10 @@ q_des = q_last_commanded + q_dot * dt
 
 默认参数
 --------
-- mode = x_line
-- duration = 60 s
+- 脚本 rosrun 默认 mode = x_line
+- 一键 launch 默认 mode = x_wave
+- 一键 launch 默认 duration = 90 s
+- 脚本默认 duration = 60 s
 - rate = 30 Hz
 - command_horizon = 0.16 s
 - stamp_mode = future
@@ -199,16 +219,18 @@ q_des = q_last_commanded + q_dot * dt
 - sim_09/base_link 导纳 surface_z = 0.336 m（dummy -> base_link 固定 +0.030 m）
 - line_center_x = 0.410 m
 - line_center_y = 0.026 m
-- Gazebo 可视 table_center_x = 0.560 m
-- Gazebo 可视 table_size_x = 0.820 m
-- desired_normal_force = 8 N
-- surface_stiffness = 600 N/m
-- surface_damping = 6 N/(m/s)
+- Gazebo 可视 table_center_x = 0.640 m
+- Gazebo 可视 table_size_x = 0.760 m
+- desired_normal_force = 6 N（一键 launch）
+- surface_stiffness = 1000 N/m（一键 launch）
+- surface_damping = 12 N/(m/s)（一键 launch）
+- 教学版期望压入量 = desired_normal_force / surface_stiffness = 0.006 m，比旧版 8/600 = 0.013 m 更接近可视曲面。
 - step_start = 6.0 s
 - step_duration = 12.0 s
 - step_height = 0.000 m
-- line_length = 0.080 m
-- line_speed = 0.004 m/s
+- line_length = 0.180 m
+- line_speed = 0.004 m/s（一键 launch）
+- line_speed = 0.004 m/s（脚本默认）
 - max_xy_velocity = 0.012 m/s
 - max_initial_xy_error = 0.35 m
 - max_initial_z_gap = 0.12 m
@@ -216,14 +238,17 @@ q_des = q_last_commanded + q_dot * dt
 - bump_x_offset = -0.018 m
 - bump_sigma_x = 0.012 m
 - bump_sigma_y = 0.060 m
-- normal_mass = 1.2
-- normal_damping = 75
-- max_z_velocity = 0.018 m/s
+- wave_height = 0.014 m
+- wave_cycles = 2.0
+- wave_sigma_y = 0.060 m
+- normal_mass = 1.5（一键 launch）
+- normal_damping = 115（一键 launch）
+- max_z_velocity = 0.014 m/s（一键 launch）
 - max_penetration = 0.030 m
 - max_lift = 0.050 m
-- jacobian_damping = 0.12
-- max_joint_velocity = 0.10 rad/s
-- max_joint_step = 0.005 rad/control-cycle
+- jacobian_damping = 0.14（一键 launch）
+- max_joint_velocity = 0.08 rad/s（一键 launch）
+- max_joint_step = 0.004 rad/control-cycle（一键 launch）
 - min_safe_singular = 0.02
 - marker_lifetime = 2.0 s
 
@@ -235,6 +260,19 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_dem
 
 这条命令默认会给 sim_09 传入 --prepare。
 这里的 prepare_joints 是专门为擦拭选的准备姿态：link7 局部 Z 轴主要朝向 base_link 的 -Z，也就是法兰/擦拭面朝向桌面。
+当前一键 launch 默认 mode=x_wave、line_length=0.180，也就是沿 18 cm 长直线擦过平滑正弦曲面。
+脚本启动时会打印：
+- Line start/end xy：擦拭线起点和终点。
+- Visual table x/y：Gazebo 可视桌面的 x/y 覆盖范围。
+- Line edge margin x/y：擦拭线到桌边的最近余量。
+
+当前默认值：
+- 18 cm 擦拭线 x 范围约 [0.320, 0.500] m。
+- 可视桌面 x 范围约 [0.260, 1.020] m。
+- x 方向离靠机器人侧桌边约 0.060 m，离远端桌边约 0.520 m。
+- 更重要的是，桌子靠机器人侧边缘现在位于 x≈0.260，比旧版 x≈0.150 更远离机械臂底座和下部连杆。
+- 可视桌面 y 范围约 [-0.194, 0.246] m，擦拭带 y 方向也有约 0.175 m 余量。
+所以当前 18 cm 版本不会碰到桌子边沿；如果以后继续加长，优先看 Line edge margin 是否低于 0.030 m。
 如果只想观察当前姿态，不执行预备动作，可以显式关闭：
 
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch prepare_arg:=--no-prepare
@@ -264,6 +302,14 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo s
 终端 2：运行 x 方向慢速直线擦拭 + 空间凸起 + z 单轴导纳
 
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_bump --duration 60 --line-length 0.080 --line-speed 0.004 --bump-height 0.010 --bump-x-offset -0.018 --bump-sigma-x 0.012 --normal-damping 75 --max-z-velocity 0.018 --jacobian-damping 0.12 --max-joint-velocity 0.10 --max-joint-step 0.005
+
+终端 2：运行长直线擦拭 + 平滑正弦曲面 + z 单轴导纳
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --prepare --mode x_wave --duration 90 --line-length 0.180 --line-speed 0.004 --wave-height 0.014 --wave-cycles 2.0 --desired-normal-force 6 --surface-stiffness 1000 --surface-damping 12 --normal-mass 1.5 --normal-damping 115 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08 --max-joint-step 0.004
+
+如果担心工作空间或桌边，先用保守线长跑一遍：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch line_length:=0.120 duration:=60
 
 使用已经启动的 RViz 看 TCP/擦拭块/虚拟桌面：
 
@@ -427,10 +473,10 @@ Gazebo 里应该看到：
   越接近 1，说明法兰/擦拭面越朝向桌面；接近 -1 则说明更像朝天。
 
 - surface_step：
-  默认 x_line 下是 0；z_probe 或显式 --step-height 时是时间台阶高度；x_bump 模式下是空间凸起高度。
+  默认 x_line 下是 0；z_probe 或显式 --step-height 时是时间台阶高度；x_bump 模式下是空间凸起高度；x_wave 模式下是正弦曲面高度。
 
 - surface_source：
-  temporal_step 或 spatial_bump。
+  temporal_step、spatial_bump 或 spatial_wave。
 
 - bump_center：
   x_bump 模式下的空间凸起中心。
@@ -440,6 +486,17 @@ Gazebo 里应该看到：
 
 - surface_z：
   当前虚拟桌面高度。
+
+- eq_tcp_z：
+  当前期望 TCP 高度。
+  eq_tcp_z = surface_z - desired_normal_force / surface_stiffness。
+  例如新版教学参数 6N / 1000N/m = 0.006m，表示希望虚拟 TCP 比虚拟表面低约 6mm，以产生 6N 法向力。
+
+- tcp_eq_err：
+  TCP 相对期望接触轨迹的误差。
+  tcp_eq_err 接近 0：说明虚拟 TCP 正在贴着期望接触轨迹走。
+  tcp_eq_err 明显为正：说明 TCP 高于期望轨迹，视觉上可能像浮空。
+  tcp_eq_err 明显为负：说明 TCP 压入过多。
 
 - penetration：
   虚拟压入量。
