@@ -13,6 +13,8 @@ sim_07 的目标是往“真正末端柔顺”迈一步：
     1. 这里调用的是 MoveIt /compute_ik 服务，不做完整规划。
     2. IK 位置映射仍不等于高频笛卡尔伺服，默认频率较低。
     3. 这个脚本适合验证“导纳输出的末端目标位姿是否可解、是否能执行”。
+    4. 如果当前 MoveIt/KDL IK 对 RM75 模型求解失败，脚本默认启用 joint-proxy fallback，
+       让你仍能看到导纳运动，同时在 state 里明确标出 backend=joint_proxy_fallback。
 """
 
 from __future__ import print_function
@@ -293,6 +295,8 @@ def solve_ik(ik_client, args, target_pose, seed_joints):
     request.ik_request.avoid_collisions = args.avoid_collisions
 
     robot_state = RobotState()
+    robot_state.is_diff = True
+    robot_state.joint_state.header.stamp = rospy.Time.now()
     robot_state.joint_state.name = list(JOINT_NAMES)
     robot_state.joint_state.position = list(seed_joints)
     request.ik_request.robot_state = robot_state
@@ -302,6 +306,27 @@ def solve_ik(ik_client, args, target_pose, seed_joints):
     if not success:
         return False, None, error_name(response.error_code)
     return True, ordered_solution_joints(response.solution), error_name(response.error_code)
+
+
+def map_offset_to_joint_target(equilibrium_joints, offset):
+    """IK 失败时的可视化 fallback。
+
+    这个映射和 sim_06 的 joint-proxy 思路一致：
+        offset -> 几个关节的小范围变化。
+
+    重要：
+        这不是 IK，也不保证 link7 精确到 target_pose。
+        它只用于在 /compute_ik 返回 NO_IK_SOLUTION 时，继续观察导纳模型的运动趋势。
+    """
+    target = list(equilibrium_joints)
+    x = clamp(offset[0], -0.06, 0.06)
+    y = clamp(offset[1], -0.03, 0.03)
+    z = clamp(offset[2], -0.03, 0.03)
+    target[0] += 1.0 * y
+    target[1] += 1.0 * x - 0.6 * z
+    target[3] += -2.2 * x + 1.2 * z
+    target[5] += 1.2 * x - 0.6 * z
+    return target
 
 
 def parse_args(argv):
@@ -320,8 +345,10 @@ def parse_args(argv):
     parser.add_argument("--joint-smoothing-alpha", type=float, default=0.35)
     parser.add_argument("--max-joint-step", type=float, default=0.015)
     parser.add_argument("--settle-duration", type=float, default=2.0)
-    parser.add_argument("--ik-timeout", type=float, default=0.05)
+    parser.add_argument("--ik-timeout", type=float, default=0.10)
     parser.add_argument("--avoid-collisions", action="store_true", help="Ask /compute_ik to collision-check IK solutions.")
+    parser.add_argument("--allow-joint-proxy-fallback", action="store_true", default=True)
+    parser.add_argument("--no-joint-proxy-fallback", dest="allow_joint_proxy_fallback", action="store_false")
     parser.add_argument("--wrench-timeout", type=float, default=0.5)
     parser.add_argument("--demo-force-x", type=float, default=5.0)
     parser.add_argument("--demo-force-y", type=float, default=0.0)
@@ -337,7 +364,7 @@ def parse_args(argv):
 
 
 def run_control_phase(args, ik_client, command_pub, target_pub, state_pub, joint_cache,
-                      admittance, equilibrium_pose, filtered_target_joints, start_time,
+                      admittance, equilibrium_pose, equilibrium_joints, filtered_target_joints, start_time,
                       last_time, duration, use_demo_force):
     rate = rospy.Rate(args.rate)
     while not rospy.is_shutdown():
@@ -358,11 +385,20 @@ def run_control_phase(args, ik_client, command_pub, target_pub, state_pub, joint
         ik_success, raw_target_joints, ik_status = solve_ik(ik_client, args, target_pose, seed_joints)
 
         if ik_success:
+            backend = "ik"
+            smoothed = smooth_joint_target(filtered_target_joints, raw_target_joints, args.joint_smoothing_alpha)
+            target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
+            filtered_target_joints = list(target_joints)
+            publish_joint_command(command_pub, target_joints, args.command_horizon)
+        elif args.allow_joint_proxy_fallback:
+            backend = "joint_proxy_fallback"
+            raw_target_joints = map_offset_to_joint_target(equilibrium_joints, admittance.offset)
             smoothed = smooth_joint_target(filtered_target_joints, raw_target_joints, args.joint_smoothing_alpha)
             target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
             filtered_target_joints = list(target_joints)
             publish_joint_command(command_pub, target_joints, args.command_horizon)
         else:
+            backend = "hold"
             raw_target_joints = list(filtered_target_joints)
             target_joints = list(filtered_target_joints)
 
@@ -372,9 +408,10 @@ def run_control_phase(args, ik_client, command_pub, target_pub, state_pub, joint
 
         target_pub.publish(target_pose)
         state_pub.publish(String(data=(
-            "ik_success={} ik_status={} force_N={} offset_m={} target_xyz={} "
+            "backend={} ik_success={} ik_status={} force_N={} offset_m={} target_xyz={} "
             "target_joints={} joint_error_max={:.4f}"
         ).format(
+            backend,
             ik_success,
             ik_status,
             fmt3(force),
@@ -389,7 +426,8 @@ def run_control_phase(args, ik_client, command_pub, target_pub, state_pub, joint
         )))
         rospy.loginfo_throttle(
             0.5,
-            "IK %s offset=%s joint_error_max=%.4f",
+            "backend=%s IK %s offset=%s joint_error_max=%.4f",
+            backend,
             ik_status,
             fmt3(admittance.offset),
             max_abs(joint_error) if joint_error is not None else -1.0,
@@ -434,6 +472,21 @@ def main():
     equilibrium_pose.header.frame_id = args.reference_frame
     equilibrium_joints = group.get_current_joint_values()
 
+    # 启动时先做一次 offset=0 的 IK 自检。
+    # 如果这里都失败，说明当前 MoveIt/KDL 对这个模型的 IK 求解链路不可靠，
+    # 后续看到 NO_IK_SOLUTION 就不是“位移太小”，而是 IK 没解出来。
+    initial_seed = joint_cache.current_ordered() or equilibrium_joints
+    eq_ik_success, _, eq_ik_status = solve_ik(ik_client, args, equilibrium_pose, initial_seed)
+    if eq_ik_success:
+        rospy.loginfo("Initial equilibrium IK check passed.")
+    else:
+        rospy.logwarn(
+            "Initial equilibrium IK check failed: %s. "
+            "sim_07 will use joint_proxy_fallback=%s when IK fails.",
+            eq_ik_status,
+            args.allow_joint_proxy_fallback,
+        )
+
     wrench_input = WrenchInput(args.reference_frame, args.wrench_timeout)
     admittance = TranslationalAdmittance(args.mass, args.damping, args.stiffness, args.max_offset, args.max_velocity)
     target_pub = rospy.Publisher(TARGET_POSE_TOPIC, PoseStamped, queue_size=5)
@@ -445,6 +498,7 @@ def main():
     print("Rate/horizon:     ", args.rate, args.command_horizon)
     print("Max offset [m]:   ", args.max_offset)
     print("IK timeout [s]:   ", args.ik_timeout)
+    print("IK fallback:      ", args.allow_joint_proxy_fallback)
 
     filtered_target_joints = list(equilibrium_joints)
     start_time = rospy.Time.now()
@@ -468,11 +522,20 @@ def main():
         ik_success, raw_target_joints, ik_status = solve_ik(ik_client, args, target_pose, seed_joints)
 
         if ik_success:
+            backend = "ik"
+            smoothed = smooth_joint_target(filtered_target_joints, raw_target_joints, args.joint_smoothing_alpha)
+            target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
+            filtered_target_joints = list(target_joints)
+            publish_joint_command(command_pub, target_joints, args.command_horizon)
+        elif args.allow_joint_proxy_fallback:
+            backend = "joint_proxy_fallback"
+            raw_target_joints = map_offset_to_joint_target(equilibrium_joints, admittance.offset)
             smoothed = smooth_joint_target(filtered_target_joints, raw_target_joints, args.joint_smoothing_alpha)
             target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
             filtered_target_joints = list(target_joints)
             publish_joint_command(command_pub, target_joints, args.command_horizon)
         else:
+            backend = "hold"
             raw_target_joints = list(filtered_target_joints)
             target_joints = list(filtered_target_joints)
 
@@ -482,9 +545,10 @@ def main():
 
         target_pub.publish(target_pose)
         state_pub.publish(String(data=(
-            "ik_success={} ik_status={} force_N={} offset_m={} target_xyz={} "
+            "backend={} ik_success={} ik_status={} force_N={} offset_m={} target_xyz={} "
             "raw_target_joints={} target_joints={} joint_error_max={:.4f}"
         ).format(
+            backend,
             ik_success,
             ik_status,
             fmt3(force),
@@ -497,7 +561,8 @@ def main():
 
         rospy.loginfo_throttle(
             0.5,
-            "IK %s force=%s offset=%s joint_error_max=%.4f",
+            "backend=%s IK %s force=%s offset=%s joint_error_max=%.4f",
+            backend,
             ik_status,
             fmt3(force),
             fmt3(admittance.offset),
@@ -520,6 +585,12 @@ def main():
             target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
             filtered_target_joints = list(target_joints)
             publish_joint_command(command_pub, target_joints, args.command_horizon)
+        elif args.allow_joint_proxy_fallback:
+            raw_target_joints = map_offset_to_joint_target(equilibrium_joints, admittance.offset)
+            smoothed = smooth_joint_target(filtered_target_joints, raw_target_joints, args.joint_smoothing_alpha)
+            target_joints = limit_joint_step(filtered_target_joints, smoothed, args.max_joint_step)
+            filtered_target_joints = list(target_joints)
+            publish_joint_command(command_pub, target_joints, args.command_horizon)
         rate.sleep()
 
     print("Experiment finished.")
@@ -531,4 +602,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

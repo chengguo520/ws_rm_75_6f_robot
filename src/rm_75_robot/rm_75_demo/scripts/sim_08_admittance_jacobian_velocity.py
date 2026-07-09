@@ -48,7 +48,7 @@ JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "join
 DEFAULT_PREPARE_JOINTS = [0.0, 0.25, 0.0, 0.35, 0.0, 0.20, 0.0]
 
 COMMAND_TOPIC = "/arm/arm_joint_controller/command"
-JOINT_STATES_TOPIC = "/joint_states"
+DEFAULT_JOINT_STATES_TOPIC = "/arm/joint_states"
 WRENCH_TOPIC = "/rm75_admittance_jacobian/target_wrench"
 TARGET_POSE_TOPIC = "/rm75_admittance_jacobian/target_pose"
 STATE_TOPIC = "/rm75_admittance_jacobian/state"
@@ -104,16 +104,18 @@ def copy_pose_stamped(source):
 
 
 class JointStateCache(object):
-    """缓存最新 /joint_states。
+    """缓存最新 joint_states 反馈。
 
     sim_08 用 measured_joints 作为 Jacobian 计算点 q_current。
-    这比一直围绕 equilibrium_joints 积分更像反馈控制。
+    默认使用 /arm/joint_states，因为 sim_10 已验证这是 Gazebo arm controller 的
+    真实反馈；如果要和 MoveIt 聚合状态对比，可以用 --joint-states-topic 切换。
     """
 
-    def __init__(self):
+    def __init__(self, topic):
+        self.topic = topic
         self._lock = threading.Lock()
         self._positions_by_name = {}
-        self.sub = rospy.Subscriber(JOINT_STATES_TOPIC, JointState, self._callback, queue_size=1)
+        self.sub = rospy.Subscriber(topic, JointState, self._callback, queue_size=1)
 
     def _callback(self, msg):
         with self._lock:
@@ -221,12 +223,27 @@ def move_to_prepare_joints(group, prepare_joints):
         raise RuntimeError("Prepare joint execution failed")
 
 
-def wait_for_joint_state(timeout):
-    msg = rospy.wait_for_message(JOINT_STATES_TOPIC, JointState, timeout=timeout)
+def wait_for_joint_state(topic, timeout):
+    msg = rospy.wait_for_message(topic, JointState, timeout=timeout)
     missing = [name for name in JOINT_NAMES if name not in msg.name]
     if missing:
-        raise RuntimeError("/joint_states missing joints: {}".format(", ".join(missing)))
+        raise RuntimeError("{} missing joints: {}".format(topic, ", ".join(missing)))
     return msg
+
+
+def wait_for_cached_joint_state(cache, timeout):
+    """等待 JointStateCache 收到一帧完整反馈。
+
+    预备姿态执行后要重新取一次反馈，作为 last_commanded_joints 的起点。
+    如果这里沿用预备动作前的旧缓存，后续命令积分会从错误关节角开始。
+    """
+    deadline = rospy.Time.now() + rospy.Duration(timeout)
+    while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+        joints = cache.current_ordered()
+        if joints is not None:
+            return joints
+        rospy.sleep(0.02)
+    raise RuntimeError("No complete cached joint state from {}".format(cache.topic))
 
 
 def wait_for_command_connection(pub, timeout):
@@ -256,9 +273,20 @@ def limit_joint_step(previous_target, target, max_step):
     return limited
 
 
-def publish_joint_command(pub, target_joints, horizon):
+def publish_joint_command(pub, target_joints, horizon, stamp_mode, lead_time):
+    """发布短 horizon 关节位置目标。
+
+    sim_10 已验证当前控制器在 future stamp 下能稳定接收命令，所以 sim_08 默认
+    使用“当前 ROS 时间 + 少量未来偏置”。保留 now/zero 参数，是为了后续继续做
+    时间戳对比实验。
+    """
     msg = JointTrajectory()
-    msg.header.stamp = rospy.Time.now()
+    if stamp_mode == "zero":
+        msg.header.stamp = rospy.Time(0)
+    elif stamp_mode == "future":
+        msg.header.stamp = rospy.Time.now() + rospy.Duration(lead_time)
+    else:
+        msg.header.stamp = rospy.Time.now()
     msg.joint_names = JOINT_NAMES
     point = JointTrajectoryPoint()
     point.positions = target_joints
@@ -308,6 +336,8 @@ def parse_args(argv):
     parser.add_argument("--duration", type=float, default=16.0)
     parser.add_argument("--rate", type=float, default=30.0)
     parser.add_argument("--command-horizon", type=float, default=0.12)
+    parser.add_argument("--stamp-mode", default="future", choices=["future", "now", "zero"])
+    parser.add_argument("--lead-time", type=float, default=0.03)
     parser.add_argument("--prepare", action="store_true", default=True)
     parser.add_argument("--no-prepare", dest="prepare", action="store_false")
     parser.add_argument("--prepare-joints", type=float, nargs=7, default=list(DEFAULT_PREPARE_JOINTS))
@@ -329,6 +359,7 @@ def parse_args(argv):
     parser.add_argument("--group", default=GROUP_NAME)
     parser.add_argument("--eef-link", default=EEF_LINK)
     parser.add_argument("--reference-frame", default=REFERENCE_FRAME)
+    parser.add_argument("--joint-states-topic", default=DEFAULT_JOINT_STATES_TOPIC)
     parser.add_argument("--velocity-scaling", type=float, default=0.10)
     parser.add_argument("--acceleration-scaling", type=float, default=0.10)
     return parser.parse_args(argv)
@@ -343,8 +374,8 @@ def main():
     moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node("sim_08_admittance_jacobian_velocity", anonymous=True)
 
-    wait_for_joint_state(timeout=3.0)
-    joint_cache = JointStateCache()
+    wait_for_joint_state(args.joint_states_topic, timeout=3.0)
+    joint_cache = JointStateCache(args.joint_states_topic)
 
     command_pub = rospy.Publisher(COMMAND_TOPIC, JointTrajectory, queue_size=1)
     wait_for_command_connection(command_pub, timeout=3.0)
@@ -369,12 +400,16 @@ def main():
     target_pub = rospy.Publisher(TARGET_POSE_TOPIC, PoseStamped, queue_size=5)
     state_pub = rospy.Publisher(STATE_TOPIC, String, queue_size=5)
 
-    measured = joint_cache.current_ordered()
-    last_commanded_joints = measured if measured is not None else group.get_current_joint_values()
+    # 预备动作执行后，以真实反馈作为命令积分的起点。
+    # 这和 sim_10 的最小验证逻辑一致：先记录当前实际关节角，再围绕它发小幅命令。
+    measured = wait_for_cached_joint_state(joint_cache, timeout=2.0)
+    last_commanded_joints = list(measured)
 
     print("RM75-6F sim_08 admittance Jacobian velocity demo")
     print("Command topic:       ", COMMAND_TOPIC)
+    print("Joint state topic:   ", args.joint_states_topic)
     print("Rate/horizon:        ", args.rate, args.command_horizon)
+    print("Stamp mode/lead time:", args.stamp_mode, args.lead_time)
     print("Jacobian damping:    ", args.jacobian_damping)
     print("Max joint velocity:  ", args.max_joint_velocity)
     print("Max joint step:      ", args.max_joint_step)
@@ -406,13 +441,16 @@ def main():
             args.max_joint_velocity,
         )
 
+        # 关键点：Jacobian 要用当前真实反馈 current_joints 计算，但命令积分必须从
+        # 上一帧已经发布的 last_commanded_joints 继续走。否则控制器稍有滞后时，
+        # q_des 会每周期被拉回当前反馈附近，连续速度命令就积不起来。
         raw_target_joints = [
-            current_joints[i] + qdot[i] * dt
-            for i in range(len(current_joints))
+            last_commanded_joints[i] + qdot[i] * dt
+            for i in range(len(last_commanded_joints))
         ]
         target_joints = limit_joint_step(last_commanded_joints, raw_target_joints, args.max_joint_step)
         last_commanded_joints = list(target_joints)
-        publish_joint_command(command_pub, target_joints, args.command_horizon)
+        publish_joint_command(command_pub, target_joints, args.command_horizon, args.stamp_mode, args.lead_time)
 
         joint_error = None
         if measured_joints is not None:
@@ -421,7 +459,7 @@ def main():
         target_pub.publish(target_pose)
         state_pub.publish(String(data=(
             "force_N={} offset_m={} velocity_mps={} acceleration={} qdot={} "
-            "min_singular={:.5f} target_joints={} joint_error_max={:.4f}"
+            "min_singular={:.5f} target_joints={} measured_joints={} joint_error_max={:.4f}"
         ).format(
             fmt3(force),
             fmt3(admittance.offset),
@@ -430,6 +468,7 @@ def main():
             fmt(qdot),
             min_singular,
             fmt(target_joints),
+            fmt(measured_joints) if measured_joints is not None else "unavailable",
             max_abs(joint_error) if joint_error is not None else -1.0,
         )))
 
@@ -462,10 +501,13 @@ def main():
             args.jacobian_damping,
             args.max_joint_velocity,
         )
-        raw_target_joints = [current_joints[i] + qdot[i] * dt for i in range(len(current_joints))]
+        raw_target_joints = [
+            last_commanded_joints[i] + qdot[i] * dt
+            for i in range(len(last_commanded_joints))
+        ]
         target_joints = limit_joint_step(last_commanded_joints, raw_target_joints, args.max_joint_step)
         last_commanded_joints = list(target_joints)
-        publish_joint_command(command_pub, target_joints, args.command_horizon)
+        publish_joint_command(command_pub, target_joints, args.command_horizon, args.stamp_mode, args.lead_time)
         rate.sleep()
 
     print("Experiment finished.")
@@ -477,4 +519,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

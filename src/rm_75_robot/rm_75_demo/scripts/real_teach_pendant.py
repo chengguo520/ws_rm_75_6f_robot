@@ -36,24 +36,58 @@ JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "join
 DEFAULT_STORE = "/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoints.yaml"
 MAX_AXES = 7
 DEFAULT_AXES = 7
-MAX_PANEL_DEGREES = 20.0
-MAX_POSE_POSITION_STEP_M = 0.05
-MAX_POSE_ROTATION_STEP_DEG = 20.0
-MAX_SCALING = 0.20
 VERIFY_TOLERANCE_DEG = 1.0
 VERIFY_POSITION_TOLERANCE_M = 0.005
 VERIFY_ROTATION_TOLERANCE_DEG = 2.0
 CARTESIAN_EEF_STEP_M = 0.005
 CARTESIAN_JUMP_THRESHOLD = 0.0
 MIN_CARTESIAN_FRACTION = 0.95
-SPEED_PRESETS = {
+
+REAL_SPEED_PRESETS = {
     "Teach 1%": (0.01, 0.01),
     "Slow 3%": (0.03, 0.03),
     "Normal 5%": (0.05, 0.05),
     "Fast 10%": (0.10, 0.08),
     "Auto 20%": (0.20, 0.12),
 }
-DEFAULT_SPEED_PRESET = "Normal 5%"
+
+SIM_SPEED_PRESETS = dict(REAL_SPEED_PRESETS)
+SIM_SPEED_PRESETS.update(
+    {
+        "Sim 30%": (0.30, 0.25),
+        "Sim 50%": (0.50, 0.40),
+        "Sim 70%": (0.70, 0.55),
+    }
+)
+
+PROFILE_DEFAULTS = {
+    "real": {
+        "range": 20.0,
+        "step_degrees": 1.0,
+        "pose_position_range": 0.05,
+        "pose_rotation_range": 20.0,
+        "position_step_m": 0.01,
+        "rotation_step_degrees": 5.0,
+        "velocity": 0.05,
+        "acceleration": 0.05,
+        "max_range": 20.0,
+        "max_scaling": 0.20,
+        "speed_presets": REAL_SPEED_PRESETS,
+    },
+    "sim": {
+        "range": 90.0,
+        "step_degrees": 5.0,
+        "pose_position_range": 0.20,
+        "pose_rotation_range": 60.0,
+        "position_step_m": 0.02,
+        "rotation_step_degrees": 10.0,
+        "velocity": 0.30,
+        "acceleration": 0.25,
+        "max_range": 120.0,
+        "max_scaling": 0.80,
+        "speed_presets": SIM_SPEED_PRESETS,
+    },
+}
 
 
 # =============================================================================
@@ -426,9 +460,9 @@ class TeachPendant(object):
         self.planned_pose = None
         self.plan_kind = None
 
-        self.step_degrees = tk.DoubleVar(value=1.0)
-        self.position_step_m = tk.DoubleVar(value=0.01)
-        self.rotation_step_degrees = tk.DoubleVar(value=5.0)
+        self.step_degrees = tk.DoubleVar(value=args.step_degrees)
+        self.position_step_m = tk.DoubleVar(value=args.position_step_m)
+        self.rotation_step_degrees = tk.DoubleVar(value=args.rotation_step_degrees)
         self.velocity = tk.DoubleVar(value=args.velocity)
         self.acceleration = tk.DoubleVar(value=args.acceleration)
         self.speed_preset = tk.StringVar(value=self.initial_speed_preset(args.velocity, args.acceleration))
@@ -459,7 +493,7 @@ class TeachPendant(object):
     # -------------------------------------------------------------------------
 
     def build_ui(self):
-        self.root.title("RM75-6F Teach Pendant")
+        self.root.title("RM75-6F Teach Pendant ({})".format(self.args.profile))
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         outer = ttk.Frame(self.root, padding=10)
@@ -475,7 +509,7 @@ class TeachPendant(object):
             top,
             width=6,
             textvariable=self.step_degrees,
-            values=[0.5, 1.0, 2.0, 5.0, 10.0],
+            values=[0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 20.0],
             state="readonly",
         ).grid(row=0, column=1, padx=(4, 12))
 
@@ -484,7 +518,7 @@ class TeachPendant(object):
             top,
             width=12,
             textvariable=self.speed_preset,
-            values=list(SPEED_PRESETS.keys()) + ["Custom"],
+            values=list(self.args.speed_presets.keys()) + ["Custom"],
             state="readonly",
         )
         speed_combo.grid(row=0, column=3, padx=(4, 12))
@@ -494,7 +528,7 @@ class TeachPendant(object):
         ttk.Scale(
             top,
             from_=0.01,
-            to=MAX_SCALING,
+            to=self.args.max_scaling,
             variable=self.velocity,
             length=120,
             command=self.speed_slider_changed,
@@ -506,7 +540,7 @@ class TeachPendant(object):
         ttk.Scale(
             top,
             from_=0.01,
-            to=MAX_SCALING,
+            to=self.args.max_scaling,
             variable=self.acceleration,
             length=120,
             command=self.speed_slider_changed,
@@ -575,7 +609,7 @@ class TeachPendant(object):
             parent,
             width=8,
             textvariable=self.position_step_m,
-            values=[0.002, 0.005, 0.01, 0.02, 0.05],
+            values=[0.002, 0.005, 0.01, 0.02, 0.05, 0.10],
             state="readonly",
         ).grid(row=0, column=3, padx=(4, 10))
         ttk.Label(parent, text="RPY step deg").grid(row=0, column=4, sticky="e")
@@ -583,7 +617,7 @@ class TeachPendant(object):
             parent,
             width=8,
             textvariable=self.rotation_step_degrees,
-            values=[1.0, 2.0, 5.0, 10.0, 20.0],
+            values=[1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
             state="readonly",
         ).grid(row=0, column=5, padx=(4, 0))
 
@@ -595,12 +629,12 @@ class TeachPendant(object):
         ttk.Label(parent, text="Target", width=10).grid(row=1, column=5)
 
         pose_rows = [
-            ("x", "m", MAX_POSE_POSITION_STEP_M),
-            ("y", "m", MAX_POSE_POSITION_STEP_M),
-            ("z", "m", MAX_POSE_POSITION_STEP_M),
-            ("roll", "deg", MAX_POSE_ROTATION_STEP_DEG),
-            ("pitch", "deg", MAX_POSE_ROTATION_STEP_DEG),
-            ("yaw", "deg", MAX_POSE_ROTATION_STEP_DEG),
+            ("x", "m", self.args.pose_position_range),
+            ("y", "m", self.args.pose_position_range),
+            ("z", "m", self.args.pose_position_range),
+            ("roll", "deg", self.args.pose_rotation_range),
+            ("pitch", "deg", self.args.pose_rotation_range),
+            ("yaw", "deg", self.args.pose_rotation_range),
         ]
         for row, (axis, unit, slider_range) in enumerate(pose_rows, start=2):
             self.build_pose_row(parent, row, axis, unit, slider_range)
@@ -684,7 +718,7 @@ class TeachPendant(object):
     # -------------------------------------------------------------------------
 
     def initial_speed_preset(self, velocity, acceleration):
-        for name, values in SPEED_PRESETS.items():
+        for name, values in self.args.speed_presets.items():
             preset_velocity, preset_acceleration = values
             if abs(velocity - preset_velocity) < 1e-6 and abs(acceleration - preset_acceleration) < 1e-6:
                 return name
@@ -692,10 +726,10 @@ class TeachPendant(object):
 
     def speed_preset_selected(self, _event=None):
         name = self.speed_preset.get()
-        if name not in SPEED_PRESETS:
+        if name not in self.args.speed_presets:
             self.update_speed_labels()
             return
-        velocity, acceleration = SPEED_PRESETS[name]
+        velocity, acceleration = self.args.speed_presets[name]
         self.velocity.set(velocity)
         self.acceleration.set(acceleration)
         self.update_speed_labels()
@@ -845,10 +879,10 @@ class TeachPendant(object):
         idx = self.pose_axis_index(axis)
         offset = self.pose_vars[axis].get()
         if idx < 3:
-            offset = self.clamp(offset, -MAX_POSE_POSITION_STEP_M, MAX_POSE_POSITION_STEP_M)
+            offset = self.clamp(offset, -self.args.pose_position_range, self.args.pose_position_range)
             self.pose_target[idx] = self.pose_synced[idx] + offset
         else:
-            offset = self.clamp(offset, -MAX_POSE_ROTATION_STEP_DEG, MAX_POSE_ROTATION_STEP_DEG)
+            offset = self.clamp(offset, -self.args.pose_rotation_range, self.args.pose_rotation_range)
             self.pose_target[idx] = self.pose_synced[idx] + rad(offset)
         if abs(offset - self.pose_vars[axis].get()) > 1e-9:
             self.pose_vars[axis].set(offset)
@@ -863,10 +897,10 @@ class TeachPendant(object):
         var = self.pose_vars[axis]
         if idx < 3:
             step = self.position_step_m.get()
-            limit = MAX_POSE_POSITION_STEP_M
+            limit = self.args.pose_position_range
         else:
             step = self.rotation_step_degrees.get()
-            limit = MAX_POSE_ROTATION_STEP_DEG
+            limit = self.args.pose_rotation_range
         var.set(self.clamp(var.get() + direction * step, -limit, limit))
         self.pose_slider_changed(axis)
 
@@ -1014,10 +1048,10 @@ class TeachPendant(object):
     def apply_scaling(self):
         velocity = self.velocity.get()
         acceleration = self.acceleration.get()
-        if not 0.0 < velocity <= MAX_SCALING:
-            raise ValueError("Velocity must be in (0, {:.2f}].".format(MAX_SCALING))
-        if not 0.0 < acceleration <= MAX_SCALING:
-            raise ValueError("Acceleration must be in (0, {:.2f}].".format(MAX_SCALING))
+        if not 0.0 < velocity <= self.args.max_scaling:
+            raise ValueError("Velocity must be in (0, {:.2f}].".format(self.args.max_scaling))
+        if not 0.0 < acceleration <= self.args.max_scaling:
+            raise ValueError("Acceleration must be in (0, {:.2f}].".format(self.args.max_scaling))
         self.group.set_max_velocity_scaling_factor(velocity)
         self.group.set_max_acceleration_scaling_factor(acceleration)
         self.update_speed_labels()
@@ -1411,24 +1445,85 @@ class TeachPendant(object):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="RM75-6F integrated teach pendant.")
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILE_DEFAULTS.keys()),
+        default="real",
+        help="real keeps conservative real-robot limits; sim uses wider and faster Gazebo-friendly defaults.",
+    )
     parser.add_argument("--axes", type=int, choices=[6, 7], default=DEFAULT_AXES)
-    parser.add_argument("--range", type=float, default=MAX_PANEL_DEGREES)
-    parser.add_argument("--velocity", type=float, default=0.05)
-    parser.add_argument("--acceleration", type=float, default=0.05)
+    parser.add_argument("--range", type=float, default=None)
+    parser.add_argument("--step-degrees", type=float, default=None)
+    parser.add_argument("--pose-position-range", type=float, default=None)
+    parser.add_argument("--pose-rotation-range", type=float, default=None)
+    parser.add_argument("--position-step-m", type=float, default=None)
+    parser.add_argument("--rotation-step-degrees", type=float, default=None)
+    parser.add_argument("--velocity", type=float, default=None)
+    parser.add_argument("--acceleration", type=float, default=None)
     parser.add_argument("--store", default=DEFAULT_STORE)
     parser.add_argument("--eef-link", default=DEFAULT_EEF_LINK)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    apply_profile_defaults(args)
+    return args
+
+
+def apply_profile_defaults(args):
+    config = PROFILE_DEFAULTS[args.profile]
+    if args.range is None:
+        args.range = config["range"]
+    if args.step_degrees is None:
+        args.step_degrees = config["step_degrees"]
+    if args.pose_position_range is None:
+        args.pose_position_range = config["pose_position_range"]
+    if args.pose_rotation_range is None:
+        args.pose_rotation_range = config["pose_rotation_range"]
+    if args.position_step_m is None:
+        args.position_step_m = config["position_step_m"]
+    if args.rotation_step_degrees is None:
+        args.rotation_step_degrees = config["rotation_step_degrees"]
+    if args.velocity is None:
+        args.velocity = config["velocity"]
+    if args.acceleration is None:
+        args.acceleration = config["acceleration"]
+
+    # 仿真允许更大的角度/速度，实物 profile 仍保留原来的保守上限。
+    args.max_range = config["max_range"]
+    args.max_scaling = config["max_scaling"]
+    args.speed_presets = config["speed_presets"]
 
 
 def validate_args(args):
-    if not 0.0 < args.range <= MAX_PANEL_DEGREES:
-        print("Refusing to run: --range must be in (0, {:.1f}].".format(MAX_PANEL_DEGREES))
+    if not 0.0 < args.range <= args.max_range:
+        print("Refusing to run: --range must be in (0, {:.1f}] for {} profile.".format(args.max_range, args.profile))
         return 2
-    if not 0.0 < args.velocity <= MAX_SCALING:
-        print("Refusing to run: --velocity must be in (0, {:.2f}].".format(MAX_SCALING))
+    if not 0.0 < args.step_degrees <= args.range:
+        print("Refusing to run: --step-degrees must be in (0, --range].")
         return 2
-    if not 0.0 < args.acceleration <= MAX_SCALING:
-        print("Refusing to run: --acceleration must be in (0, {:.2f}].".format(MAX_SCALING))
+    if not 0.0 < args.pose_position_range <= 0.50:
+        print("Refusing to run: --pose-position-range must be in (0, 0.50].")
+        return 2
+    if not 0.0 < args.pose_rotation_range <= 180.0:
+        print("Refusing to run: --pose-rotation-range must be in (0, 180].")
+        return 2
+    if not 0.0 < args.position_step_m <= args.pose_position_range:
+        print("Refusing to run: --position-step-m must be in (0, --pose-position-range].")
+        return 2
+    if not 0.0 < args.rotation_step_degrees <= args.pose_rotation_range:
+        print("Refusing to run: --rotation-step-degrees must be in (0, --pose-rotation-range].")
+        return 2
+    if not 0.0 < args.velocity <= args.max_scaling:
+        print(
+            "Refusing to run: --velocity must be in (0, {:.2f}] for {} profile.".format(
+                args.max_scaling, args.profile
+            )
+        )
+        return 2
+    if not 0.0 < args.acceleration <= args.max_scaling:
+        print(
+            "Refusing to run: --acceleration must be in (0, {:.2f}] for {} profile.".format(
+                args.max_scaling, args.profile
+            )
+        )
         return 2
     return 0
 

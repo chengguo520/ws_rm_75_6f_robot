@@ -7,6 +7,11 @@ RM75-6F sim_07：IK 位置映射导纳实验
 - 相比 sim_06，sim_07 不再使用 joint-proxy 经验映射，而是把导纳输出真正转换成 link7 的目标位姿。
 - 这个实验用于理解 IK 位置映射，不是最终高频柔顺伺服。
 
+重要现象记录：
+- 如果终端持续出现 IK NO_IK_SOLUTION，而且 offset_m=[0,0,0] 时也失败，这不是位移太小。
+- 这说明当前 MoveIt/KDL IK 对这个 RM75 模型的目标位姿没有解出来。
+- 新版本 sim_07 默认启用 joint_proxy_fallback：IK 失败时仍然用类似 sim_06 的经验映射让机械臂运动，同时在 state 里标出 backend=joint_proxy_fallback。
+
 适用环境
 --------
 - 工作区：/home/ros/ws_rm_75_6f_robot
@@ -55,7 +60,7 @@ ROS 框架关系
 
 4. /rm75_admittance_ik/state
    - 类型：std_msgs/String
-   - 包含 ik_success、ik_status、force_N、offset_m、target_xyz、raw_target_joints、target_joints、joint_error_max。
+   - 包含 backend、ik_success、ik_status、force_N、offset_m、target_xyz、raw_target_joints、target_joints、joint_error_max。
 
 5. /arm/arm_joint_controller/command
    - 类型：trajectory_msgs/JointTrajectory
@@ -70,6 +75,7 @@ ROS 框架关系
   -> offset_m
   -> equilibrium_pose + offset_m = target_pose
   -> /compute_ik 解出 raw_target_joints
+  -> 如果 IK 失败，默认进入 joint_proxy_fallback
   -> 关节目标低通滤波和每周期步长限幅
   -> /arm/arm_joint_controller/command
   -> Gazebo 机械臂运动
@@ -113,7 +119,8 @@ target_pose = equilibrium_pose + offset
 - demo_force_x = 5 N
 - max_offset = [0.06, 0.03, 0.03] m
 - max_velocity = [0.025, 0.015, 0.015] m/s
-- ik_timeout = 0.05 s
+- ik_timeout = 0.10 s
+- allow_joint_proxy_fallback = true
 - joint_smoothing_alpha = 0.35
 - max_joint_step = 0.015 rad/control-cycle
 
@@ -134,6 +141,12 @@ rosrun rm_75_demo sim_07_admittance_ik_position.py
 观察 IK 状态：
 
 rostopic echo /rm75_admittance_ik/state
+
+重点看：
+- backend=ik：说明当前周期 IK 成功，执行的是 IK 解。
+- backend=joint_proxy_fallback：说明 IK 失败，脚本用经验映射继续让导纳运动可见。
+- ik_success=True/False：只表示 /compute_ik 是否成功。
+- ik_status=NO_IK_SOLUTION：MoveIt/KDL 没有给出 IK 解。
 
 观察目标位姿：
 
@@ -165,7 +178,7 @@ wrench:
 --------
 IK 更稳、更慢：
 
-rosrun rm_75_demo sim_07_admittance_ik_position.py --rate 8 --command-horizon 0.25 --joint-smoothing-alpha 0.25 --max-joint-step 0.01
+rosrun rm_75_demo sim_07_admittance_ik_position.py --rate 8 --command-horizon 0.25 --joint-smoothing-alpha 0.25 --max-joint-step 0.01 --ik-timeout 0.2
 
 响应稍快：
 
@@ -175,12 +188,17 @@ rosrun rm_75_demo sim_07_admittance_ik_position.py --rate 15 --command-horizon 0
 
 rosrun rm_75_demo sim_07_admittance_ik_position.py --demo-force-x 3 --max-offset 0.04 0.02 0.02
 
+严格验证 IK，不允许 fallback：
+
+rosrun rm_75_demo sim_07_admittance_ik_position.py --no-joint-proxy-fallback
+
 观察现象
 --------
 成功时应该看到：
 - 先移动到预备姿态。
 - /compute_ik 服务可用。
-- ik_success=True。
+- 如果 IK 成功：backend=ik，ik_success=True。
+- 如果 IK 失败但 fallback 启用：backend=joint_proxy_fallback，ik_success=False，机械臂仍会有可视化柔顺运动。
 - force_N 有值时 offset_x 增大。
 - target_xyz 是 equilibrium_pose 加上 offset 后的位置。
 - Gazebo 中机械臂跟随 IK 解运动。
@@ -196,10 +214,13 @@ rosrun rm_75_demo sim_07_admittance_ik_position.py --demo-force-x 3 --max-offset
 
 2. ik_success=False
    - 目标位姿可能不可达或接近奇异。
+   - 如果 offset_m=[0,0,0] 时也失败，说明不是位移太小，而是当前 IK 求解链路本身没有解出平衡位姿。
    - 减小偏移：
      --max-offset 0.03 0.02 0.02 --demo-force-x 3
    - 降低速度：
      --max-velocity 0.015 0.010 0.010
+   - 放宽 IK 时间：
+     --ik-timeout 0.2
 
 3. 运动跳变
    - 降低 alpha：
@@ -208,6 +229,9 @@ rosrun rm_75_demo sim_07_admittance_ik_position.py --demo-force-x 3 --max-offset
      --max-joint-step 0.01
 
 4. 机械臂不动
+   - 先看 state 里的 backend。
+   - 如果 backend=hold，说明 IK 失败且 fallback 被关闭。
+   - 如果 backend=joint_proxy_fallback 但仍不动，继续检查 command topic。
    - 检查命令 topic：
      rostopic echo -n1 /arm/arm_joint_controller/command
    - 检查控制器状态：
@@ -225,4 +249,3 @@ rosrun rm_75_demo sim_07_admittance_ik_position.py --demo-force-x 3 --max-offset
 - 用 sim_07 理解“末端目标 pose 和 IK 解”的关系。
 - 如果 IK 经常失败，说明单纯每周期 IK 不是最好的柔顺主线。
 - 下一步看 sim_08：Jacobian 伪逆速度映射，更接近连续柔顺控制。
-

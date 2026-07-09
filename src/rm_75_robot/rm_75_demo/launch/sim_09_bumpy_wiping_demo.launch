@@ -1,0 +1,52 @@
+<launch>
+  <!--
+    One-command visual demo for sim_09.
+    It starts the RM75-6F Gazebo + MoveIt scene with a visible table, then runs
+    the slow x_line wiping controller. sim_09 has long startup waits, so it can
+    be launched together with Gazebo instead of from a second terminal.
+  -->
+  <arg name="mode" default="x_line"/>
+  <arg name="duration" default="60.0"/>
+  <arg name="startup_timeout" default="60.0"/>
+  <arg name="settle_time" default="4.0"/>
+  <!--
+    The default prepare joints are a wiping-ready posture with the link7/flange
+    local Z axis facing mostly downward. If the visual table placement is being
+    tuned, set prepare_arg to no-prepare for pure observation.
+  -->
+  <arg name="prepare_arg" default="--prepare"/>
+  <arg name="surface_z" default="0.336"/>
+  <arg name="line_center_x" default="0.410"/>
+  <arg name="line_center_y" default="0.026"/>
+  <arg name="line_length" default="0.080"/>
+  <arg name="line_speed" default="0.004"/>
+  <arg name="step_height" default="0.0"/>
+  <arg name="normal_damping" default="75.0"/>
+  <arg name="max_z_velocity" default="0.018"/>
+  <arg name="jacobian_damping" default="0.12"/>
+  <arg name="max_joint_velocity" default="0.10"/>
+  <arg name="max_joint_step" default="0.005"/>
+  <arg name="marker_lifetime" default="2.0"/>
+  <arg name="paused" default="false"/>
+  <arg name="gui" default="true"/>
+  <arg name="headless" default="false"/>
+  <arg name="use_rviz" default="true"/>
+  <arg name="rviz_software_rendering" default="true"/>
+  <arg name="gazebo_software_rendering" default="false"/>
+
+  <include file="$(find rm_75_gazebo)/launch/arm_75_bumpy_wiping_moveit.launch">
+    <arg name="paused" value="$(arg paused)" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="use_rviz" value="$(arg use_rviz)" />
+    <arg name="rviz_software_rendering" value="$(arg rviz_software_rendering)" />
+    <arg name="gazebo_software_rendering" value="$(arg gazebo_software_rendering)" />
+  </include>
+
+  <node
+    pkg="rm_75_demo"
+    type="sim_09_admittance_table_wiping.py"
+    name="sim_09_admittance_table_wiping"
+    output="screen"
+    args="$(arg prepare_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --step-height $(arg step_height) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime)" />
+</launch>

@@ -1,0 +1,152 @@
+RM75-6F sim_10 关节命令链路最小验证实验
+========================================
+
+实验目标
+--------
+- 继续学习柔顺控制前，先验证最底层执行链路是否可靠。
+- 本实验只检查：
+  /arm/arm_joint_controller/command
+    -> Gazebo JointTrajectoryController
+    -> /arm/joint_states 或 /joint_states 反馈
+- 它不做导纳、不做 IK、不做 Jacobian。
+- 如果这个小实验中关节反馈都不变化，就不要继续堆擦桌子算法，应先排查 ros_control、joint_states 来源、时间戳和关节角基准。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 仿真：Gazebo + RM75-6F + MoveIt
+- 脚本路径：src/rm_75_robot/rm_75_demo/scripts/sim_10_joint_command_sanity.py
+- 控制器输入：/arm/arm_joint_controller/command
+- 默认反馈：/arm/joint_states
+- 可选对比反馈：/joint_states
+
+为什么先做这个实验
+------------------
+上次 sim_09 擦桌子实验中，日志里出现过“命令在发、desired 在变、但是真实 link7 或 joint_states 不动”的情况。
+这说明问题可能不在导纳公式，而在更底层：
+- JointTrajectoryController 是否真的接收了 /command。
+- trajectory header stamp 是否被认为过期。
+- /arm/joint_states 和 /joint_states 哪个才是真实反馈。
+- /arm/joint_states 里是否有 4.18、-6.28 这类大角度包装值。
+- 命令基准到底应该用原始反馈角，还是先归一化到 [-pi, pi]。
+
+ROS 框架关系
+------------
+- sim_10_joint_command_sanity.py
+  负责发布一个很小的单关节正弦或阶跃命令。
+- /arm/arm_joint_controller/command
+  trajectory_msgs/JointTrajectory，Gazebo position JointTrajectoryController 的输入。
+- /arm/joint_states
+  Gazebo arm controller namespace 下的关节反馈，优先用于判断真实运动。
+- /joint_states
+  MoveIt/robot_state_publisher 可能使用的聚合状态，可用于对比。
+- /rm75_joint_command_sanity/state
+  std_msgs/String，输出当前命令、反馈和 measured_delta。
+
+数据流/控制流程
+---------------
+初始 joint_states
+  -> 记录 command_base
+  -> 对指定关节加很小的 delta
+  -> 发布 JointTrajectory 单点目标
+  -> 读取 joint_states
+  -> 计算 measured_delta
+  -> 判断 observed_peak 是否超过 min_motion
+
+关键控制逻辑
+------------
+- 默认测试关节：joint4。
+- 默认扰动幅度：0.08 rad，约 4.6 度。
+- 默认命令频率：20 Hz。
+- 默认单点轨迹 horizon：0.25 s。
+- 默认 header stamp：当前时间 + 0.03 s，避免控制器收到时已经变成“过去的轨迹点”。
+- 默认反馈 topic：/arm/joint_states，因为它更接近 Gazebo 控制器真实反馈。
+
+正弦模式：
+delta = amplitude * sin(2*pi*t/duration)
+
+阶跃模式：
+前半段 delta = +amplitude
+后半段 delta = -amplitude
+
+角度差观察：
+measured_delta = normalize_angle(current_joint - start_joint)
+
+这里用最短角度差观察反馈，是为了避免 4.18 rad 和 -2.10 rad 这种等效角带来的显示混乱。
+
+命令行操作
+----------
+启动仿真：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+运行默认最小验证：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py
+
+观察诊断状态：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo /rm75_joint_command_sanity/state
+
+对比 /joint_states 是否和 /arm/joint_states 一致：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py --joint-states-topic /joint_states
+
+如果 /arm/joint_states 出现大角度包装值，先不要急着改 sim_09，可以单独测试归一化命令基准：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py --normalize-command-base
+
+测试时间戳模式：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py --stamp-mode now
+
+测试零时间戳模式：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py --stamp-mode zero
+
+测试更明显但仍较小的阶跃：
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py --mode step --amplitude 0.12
+
+观察现象
+--------
+成功时：
+- Gazebo 里对应关节应有轻微可见运动。
+- 脚本最后输出 PASS。
+- observed_peak 或 observed_span 应大于 min_motion，默认 min_motion = 0.02 rad。
+- /rm75_joint_command_sanity/state 里 measured_delta 应跟随 command 有变化。
+
+失败时：
+- 脚本最后输出 WARN。
+- command 数值在变，但 measured_delta 接近 0。
+- 这时应先排查控制器、joint_states 来源和 trajectory 时间戳，不要继续修改导纳算法。
+
+排错 checklist
+--------------
+- 没有 subscriber：
+  检查 /arm/arm_joint_controller 是否启动。
+  命令：cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic info /arm/arm_joint_controller/command
+
+- 没有完整 joint_states：
+  检查 /arm/joint_states 是否有 joint1 到 joint7。
+  命令：cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/joint_states
+
+- /arm/joint_states 不动但 /joint_states 在动：
+  说明反馈来源可能被聚合或映射过，需要重新理清 launch 中 source_list。
+
+- /joint_states 不动但 /arm/joint_states 在动：
+  说明 Gazebo 控制器真实动了，但 MoveIt/TF 使用的状态源可能没接对。
+
+- 出现大角度包装值：
+  先记录原始角度，再用 --normalize-command-base 单独对比，不要直接在 sim_09 里盲目归一化所有命令。
+
+- stamp-mode future 能动，now 或 zero 不能动：
+  后续连续控制脚本应保留未来时间戳偏置。
+
+安全与限幅
+----------
+- 这是 Gazebo 仿真实验，不用于实物机械臂。
+- 默认幅度只有 0.08 rad，但仍应确认仿真环境没有异常碰撞。
+- 不要在实物上直接运行这个脚本；实物需要独立的低速、小步、急停明确的测试程序。
+
+下一步
+------
+- 如果 sim_10 通过，再回到 sim_08 Jacobian 速度控制，确认 q_des 积分和 /command 执行链路一致。
+- 如果 sim_10 不通过，优先修控制器链路：
+  1. /arm/arm_joint_controller/command 连接；
+  2. trajectory header stamp；
+  3. /arm/joint_states 与 /joint_states 来源；
+  4. 关节角包装和命令基准。
+- 等 sim_08 稳定后，再进入 sim_09 擦桌子 z 方向导纳和接触反馈。

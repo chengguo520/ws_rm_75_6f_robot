@@ -9,6 +9,7 @@
     <arg name="use_two_finger_gripper" default="false"/>
     <arg name="use_rviz" default="true"/>
     <arg name="rviz_software_rendering" default="true"/>
+    <arg name="gazebo_software_rendering" default="false"/>
     <arg name="world_name" default="worlds/empty.world"/>
 
     <!--
@@ -16,7 +17,8 @@
       desktops often needs Mesa software rendering to display robot meshes.
       Keep Gazebo on GPU by default, then pass a separate switch to RViz below.
     -->
-    <env name="LIBGL_ALWAYS_SOFTWARE" value="0" />
+    <env if="$(arg gazebo_software_rendering)" name="LIBGL_ALWAYS_SOFTWARE" value="1" />
+    <env unless="$(arg gazebo_software_rendering)" name="LIBGL_ALWAYS_SOFTWARE" value="0" />
 
     <!-- Launch Gazebo  -->
     <include file="$(find rm_75_gazebo)/launch/arm_world.launch">

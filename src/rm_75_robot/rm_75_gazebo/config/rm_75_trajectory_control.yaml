@@ -20,7 +20,8 @@ arm:
       joint7:   {p: 1000.0, i: 0.0, d: 0.1, i_clamp: 0.0}
 
     constraints:
-      goal_time: 2.0
+      # 仿真调姿态时 Gazebo 可能比 MoveIt 估计时间慢，放宽终点等待时间避免过早 TIMED_OUT。
+      goal_time: 8.0
       stopped_velocity_tolerance: 0.05
       joint1: {trajectory: 0.2, goal: 0.05}
       joint2: {trajectory: 0.2, goal: 0.05}

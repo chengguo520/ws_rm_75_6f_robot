@@ -1,0 +1,37 @@
+<launch>
+  <!--
+    One-command launch for the current table-wiping calibration workflow.
+
+    It starts the Gazebo visual table, MoveIt, and RViz, then runs sim_12 to
+    read the saved teach-pendant waypoints and add the matching tabletop to
+    MoveIt's PlanningScene. By default this launch does not move the robot.
+  -->
+  <arg name="paused" default="false"/>
+  <arg name="gui" default="true"/>
+  <arg name="headless" default="false"/>
+  <arg name="use_rviz" default="true"/>
+  <arg name="rviz_software_rendering" default="true"/>
+  <arg name="gazebo_software_rendering" default="false"/>
+
+  <arg name="store" default="/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoints.yaml"/>
+  <arg name="start" default="cazhuozi1"/>
+  <arg name="end" default="cazhuozi2"/>
+  <arg name="command" default="setup"/>
+  <arg name="script_args" default=""/>
+
+  <include file="$(find rm_75_gazebo)/launch/arm_75_bumpy_wiping_moveit.launch">
+    <arg name="paused" value="$(arg paused)" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="use_rviz" value="$(arg use_rviz)" />
+    <arg name="rviz_software_rendering" value="$(arg rviz_software_rendering)" />
+    <arg name="gazebo_software_rendering" value="$(arg gazebo_software_rendering)" />
+  </include>
+
+  <node
+    pkg="rm_75_demo"
+    type="sim_12_waypoint_table_line_calibration.py"
+    name="sim_12_waypoint_table_line_calibration"
+    output="screen"
+    args="--store $(arg store) --start $(arg start) --end $(arg end) --command $(arg command) $(arg script_args)" />
+</launch>

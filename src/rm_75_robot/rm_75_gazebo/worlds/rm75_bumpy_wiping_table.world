@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="rm75_bumpy_wiping_table">
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!--
+      Gazebo visual world for sim_09.
+      The table is placed near the wiping-ready workspace but not tucked
+      against the robot base. In Gazebo/world (same as the robot dummy root here),
+      the visible top surface is z=0.366 m. The controller scripts that work in
+      base_link use z=0.336 m because dummy -> base_link is a fixed +0.030 m.
+
+      The visible table body is shifted forward in +X relative to the saved
+      short wiping line, so the robot-side edge is not tucked against the arm
+      and there is more room for a longer future wiping stroke.
+
+      The current controller still uses a mathematical virtual normal force
+      instead of Gazebo contact feedback. This world makes the surface visible
+      and aligned with the control model so the motion reads like table wiping.
+      The table is visual-only for this stage; physical collision/contact will
+      be added after a dedicated force-sensor validation step.
+    -->
+    <model name="bumpy_wiping_table">
+      <static>true</static>
+      <pose>0.560 0.026 0.341 0 0 0</pose>
+      <link name="table_link">
+        <visual name="table_visual">
+          <geometry>
+            <box>
+              <size>0.82 0.44 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.18 0.22 0.20 1.0</ambient>
+            <diffuse>0.22 0.28 0.25 1.0</diffuse>
+            <specular>0.05 0.05 0.05 1.0</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Blue straight wiping lane: sim_09 moves link7 slowly along this x-direction line. -->
+    <model name="wiping_lane">
+      <static>true</static>
+      <pose>0.410 0.026 0.369 0 0 0</pose>
+      <link name="lane_link">
+        <visual name="lane_visual">
+          <geometry>
+            <box>
+              <size>0.24 0.08 0.004</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.05 0.35 0.85 0.65</ambient>
+            <diffuse>0.05 0.35 0.85 0.65</diffuse>
+          </material>
+          <transparency>0.35</transparency>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Small visible bump aligned with sim_09 default bump_x_offset=-0.018 m. -->
+    <model name="virtual_bump_patch">
+      <static>true</static>
+      <pose>0.392 0.026 0.372 0 0 0</pose>
+      <link name="bump_link">
+        <visual name="bump_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.012</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.92 0.30 0.12 1.0</ambient>
+            <diffuse>0.98 0.34 0.14 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

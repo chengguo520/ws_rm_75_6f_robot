@@ -1,3 +1,3 @@
 # Export Index
 
-- [# Files mentioned by the user:](2026-05-25-0917_vscode_019e5e6d-1b61-7031-a321-af320e71281a_Files-mentioned-by-the-user/transcript.md)
+- [学习RM75-6F柔顺控制](2026-06-01-0430_vscode_019e8171-750e-7261-8afd-63018bdecf53_RM75-6F/transcript.md)
