@@ -212,9 +212,17 @@ class ZAxisAdmittance(object):
     def step(self, contact_force, desired_force, dt):
         dt = clamp(dt, 0.001, 0.2)
         force_error = contact_force - desired_force
-        self.acceleration = (force_error - self.damping * self.velocity) / self.mass
-        self.velocity += self.acceleration * dt
+        previous_velocity = self.velocity
+        if self.damping > 1e-9:
+            # 在一个控制周期内把力误差视为常量，精确积分一阶速度方程。
+            # 这样 30 Hz 下增大阻尼不会触发显式欧拉的正负交替数值振荡。
+            decay = math.exp(-self.damping * dt / self.mass)
+            steady_velocity = force_error / self.damping
+            self.velocity = decay * self.velocity + (1.0 - decay) * steady_velocity
+        else:
+            self.velocity += force_error * dt / self.mass
         self.velocity = clamp(self.velocity, -self.max_velocity, self.max_velocity)
+        self.acceleration = (self.velocity - previous_velocity) / dt
         return self.velocity, self.acceleration, force_error
 
 
@@ -330,6 +338,15 @@ def smooth_pulse(elapsed, start, duration, height, ramp):
         down_t = duration - local_t
         return height * 0.5 * (1.0 - math.cos(math.pi * down_t / ramp))
     return height
+
+
+def smooth_start_gain(elapsed, duration):
+    """用半余弦把空间曲面从 0 平滑接入到完整高度。"""
+    if duration <= 0.0 or elapsed >= duration:
+        return 1.0
+    if elapsed <= 0.0:
+        return 0.0
+    return 0.5 * (1.0 - math.cos(math.pi * elapsed / duration))
 
 
 class StraightLinePath(object):
@@ -758,9 +775,10 @@ def parse_args(argv):
     parser.add_argument("--wave-spacing", type=float, default=0.055, help="x_wave distance from center dip to each peak, m.")
     parser.add_argument("--wave-sigma-x", type=float, default=0.020, help="x_wave Gaussian sigma along x, m.")
     parser.add_argument("--wave-sigma-y", type=float, default=0.060, help="x_wave Gaussian sigma along y, m.")
+    parser.add_argument("--surface-blend-time", type=float, default=2.0, help="Half-cosine blend time for spatial bump/wave activation, s.")
 
     parser.add_argument("--normal-mass", type=float, default=1.2)
-    parser.add_argument("--normal-damping", type=float, default=75.0)
+    parser.add_argument("--normal-damping", type=float, default=65.0)
     parser.add_argument("--max-z-velocity", type=float, default=0.018)
     parser.add_argument("--max-penetration", type=float, default=0.030)
     parser.add_argument("--max-lift", type=float, default=0.050)
@@ -769,7 +787,7 @@ def parse_args(argv):
     parser.add_argument("--xy-hold-gain", type=float, default=1.8)
     parser.add_argument("--max-xy-velocity", type=float, default=0.012)
 
-    parser.add_argument("--jacobian-damping", type=float, default=0.12)
+    parser.add_argument("--jacobian-damping", type=float, default=0.10)
     parser.add_argument("--max-joint-velocity", type=float, default=0.10)
     parser.add_argument("--max-joint-step", type=float, default=0.005)
     parser.add_argument("--min-safe-singular", type=float, default=0.02, help="Warn when the translational Jacobian minimum singular value drops below this.")
@@ -929,6 +947,7 @@ def main():
     print("Wave peak x:          ", fmt([hold_xy[0] - args.line_length * 0.25, hold_xy[0] + args.line_length * 0.25]))
     print("Wave height/cycles:   ", "{:.4f}m / {:.2f}".format(args.wave_height, args.wave_cycles))
     print("Wave sigma y:         ", "{:.4f}m".format(args.wave_sigma_y))
+    print("Surface blend time:   ", "{:.2f}s".format(args.surface_blend_time))
     print("Base surface z:       ", "{:.4f}".format(base_surface_z))
     print("TCP z limits:         ", "[{:.4f}, {:.4f}]".format(min_tcp_z, max_tcp_z))
     print("Desired normal force: ", args.desired_normal_force)
@@ -998,6 +1017,7 @@ def main():
         tcp_z = link_xyz[2] - args.tool_offset_z
         tcp_vz = (tcp_z - last_tcp_z) / dt
         last_tcp_z = tcp_z
+        surface_blend = smooth_start_gain(motion_elapsed, args.surface_blend_time)
 
         if elapsed < args.settle_time:
             surface_source = "settle"
@@ -1012,7 +1032,7 @@ def main():
                 args.bump_height,
                 args.bump_sigma_x,
                 args.bump_sigma_y,
-            )
+            ) * surface_blend
         elif args.mode == "x_wave":
             surface_source = "spatial_wave"
             surface_step = spatial_wave_surface(
@@ -1024,7 +1044,7 @@ def main():
                 args.wave_cycles,
                 args.line_length,
                 args.wave_sigma_y,
-            )
+            ) * surface_blend
         elif args.step_height <= 0.0:
             # 默认 x_line 只做固定桌面上的直线擦拭；不额外叠加时间台阶，
             # 这样先把“沿桌面一个方向运动”这件事看清楚。
@@ -1128,7 +1148,7 @@ def main():
         state_text = (
             "elapsed={:.2f} mode={} xy_ref={} link_xyz={} link7_z_axis={} tool_down_score={:.4f} "
             "tcp_z={:.4f} base_surface_z={:.4f} "
-            "surface_source={} surface_step={:.4f} surface_z={:.4f} eq_tcp_z={:.4f} tcp_eq_err={:.4f} "
+            "surface_source={} surface_blend={:.3f} surface_step={:.4f} surface_z={:.4f} eq_tcp_z={:.4f} tcp_eq_err={:.4f} "
             "bump_center={} penetration={:.4f} "
             "fz_virtual_N={:.3f} desired_fz_N={:.3f} force_error_N={:.3f} "
             "vz_raw={:.4f} vz_admittance={:.4f} tcp_limit={} cartesian_velocity={} "
@@ -1143,6 +1163,7 @@ def main():
             tcp_z,
             base_surface_z,
             surface_source,
+            surface_blend,
             surface_step,
             surface_z,
             equilibrium_tcp_z,
@@ -1165,7 +1186,7 @@ def main():
 
         rospy.loginfo_throttle(
             max(0.1, args.log_period),
-            "mode=%s x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
+            "mode=%s x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f blend=%.2f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
             args.mode,
             link_xyz[0],
             xy_ref[0],
@@ -1173,6 +1194,7 @@ def main():
             tcp_equilibrium_error,
             tool_down_score,
             surface_step,
+            surface_blend,
             surface_source,
             contact_force,
             vz,

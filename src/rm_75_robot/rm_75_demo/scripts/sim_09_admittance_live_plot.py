@@ -29,6 +29,7 @@ SCALAR_KEYS = [
     "tool_down_score",
     "tcp_z",
     "base_surface_z",
+    "surface_blend",
     "surface_step",
     "surface_z",
     "eq_tcp_z",
@@ -297,7 +298,7 @@ class LivePlotter(object):
             self.update_axis_limits(axis, visible, line_specs, min_span)
 
         self.status_text.set_text(
-            "topic={}  rx={:.1f}Hz  refresh={:.1f}Hz  samples={}  resets={}  mode={}  src={}  limit={}  "
+            "topic={}  rx={:.1f}Hz  refresh={:.1f}Hz  samples={}  resets={}  mode={}  src={}  blend={:.2f}  limit={}  "
             "t={:.2f}s  fz={:.2f}N  vz={:.4f}m/s  eq_err={:.4f}m".format(
                 self.args.state_topic,
                 received_hz,
@@ -306,6 +307,7 @@ class LivePlotter(object):
                 reset_count,
                 latest.get("mode") or "?",
                 latest.get("surface_source") or "?",
+                latest.get("surface_blend") if is_finite(latest.get("surface_blend")) else float("nan"),
                 latest.get("tcp_limit") or "?",
                 latest_time,
                 latest.get("fz_virtual_N") if is_finite(latest.get("fz_virtual_N")) else float("nan"),

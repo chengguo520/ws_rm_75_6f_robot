@@ -27,13 +27,14 @@
   <arg name="wave_spacing" default="0.055"/>
   <arg name="wave_sigma_x" default="0.020"/>
   <arg name="wave_sigma_y" default="0.060"/>
+  <arg name="surface_blend_time" default="2.0"/>
   <arg name="desired_normal_force" default="6.0"/>
   <arg name="surface_stiffness" default="1000.0"/>
   <arg name="surface_damping" default="12.0"/>
   <arg name="normal_mass" default="1.5"/>
-  <arg name="normal_damping" default="115.0"/>
+  <arg name="normal_damping" default="65.0"/>
   <arg name="max_z_velocity" default="0.014"/>
-  <arg name="jacobian_damping" default="0.14"/>
+  <arg name="jacobian_damping" default="0.10"/>
   <arg name="max_joint_velocity" default="0.08"/>
   <arg name="max_joint_step" default="0.004"/>
   <arg name="marker_lifetime" default="2.0"/>
@@ -61,7 +62,7 @@
     type="sim_09_admittance_table_wiping.py"
     name="sim_09_admittance_table_wiping"
     output="screen"
-    args="$(arg prepare_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime)" />
+    args="$(arg prepare_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime)" />
 
   <node
     if="$(arg plot)"

@@ -100,7 +100,7 @@ ROS 框架关系
 
 4. /rm75_z_admittance_probe/state
    - 类型：std_msgs/String
-   - 包含 link_xyz、tcp_z、surface_z、penetration、fz_virtual_N、vz_admittance、joint_error_max 等诊断量。
+   - 包含 link_xyz、tcp_z、surface_blend、surface_z、penetration、fz_virtual_N、vz_admittance、joint_error_max 等诊断量。
    - sim_09_admittance_live_plot.py 解析这个 topic 生成实时曲线。
 
 5. /rm75_z_admittance_probe/target_pose
@@ -157,7 +157,11 @@ surface_step = bump_height * exp(-0.5 * ((x - bump_x) / sigma_x)^2 - 0.5 * ((y -
 在 x_wave 模式中，surface_step 来自一条正弦平方曲面：
 
 s = clamp((x - center_x) / line_length + 0.5, 0, 1)
-surface_step = wave_height * sin(pi * wave_cycles * s)^2 * y_gain
+surface_blend = 0.5 * (1 - cos(pi * motion_elapsed / surface_blend_time))
+surface_step = surface_blend * wave_height * sin(pi * wave_cycles * s)^2 * y_gain
+
+surface_blend 在默认 2 s 内从 0 平滑增加到 1。
+这样 settle 结束时即使机械臂还没有完全到达擦拭线中心，虚拟曲面也不会瞬间跳高并产生力尖峰。
 
 默认参数：
 - wave_height = 0.014 m，凸起高度约 14 mm。
@@ -167,7 +171,7 @@ surface_step = wave_height * sin(pi * wave_cycles * s)^2 * y_gain
 这个曲面是连续的正弦函数，不是硬台阶，也不是一格一格的方块。
 Gazebo 里使用 smooth_wave_surface.dae 做可视网格；它不参与碰撞，只和 sim_09 里的数学曲面对齐。
 
-默认 base_surface_z 固定为当前标定工作桌面高度 0.366 m，和 Gazebo 视觉桌面一致。
+默认 base_surface_z 在 base_link 中为 0.336 m，对应 Gazebo world/dummy 坐标中的可视桌面高度 0.366 m。
 
 如果调试时只是想围绕当前 TCP 高度做 z_probe，可以加 --auto-surface-z，让脚本按初始 TCP 高度和期望法向力估计：
 
@@ -188,6 +192,15 @@ fz_virtual = surface_stiffness * penetration - surface_damping * tcp_vz
 z 单轴导纳：
 
 M * z_ddot + D * z_dot = fz_virtual - desired_fz
+
+当前代码不再用显式欧拉直接执行 v_next = v + a * dt，而是在一个控制周期内把力误差视为常量，使用一阶精确离散：
+
+alpha = exp(-D * dt / M)
+v_steady = (fz_virtual - desired_fz) / D
+v_next = alpha * v + (1 - alpha) * v_steady
+
+当 D = 0 时才退回无阻尼积分。
+这项修改避免旧版在 30 Hz、M = 1.5、D = 115 时出现 D * dt / M 约等于 2.56 的正负速度数值振荡。
 
 符号解释：
 - fz_virtual > desired_fz：说明压得太重或虚拟桌面台阶升高，vz 变正，末端上抬。
@@ -247,12 +260,13 @@ q_des = q_last_commanded + q_dot * dt
 - wave_height = 0.014 m
 - wave_cycles = 2.0
 - wave_sigma_y = 0.060 m
+- surface_blend_time = 2.0 s（一键 launch）
 - normal_mass = 1.5（一键 launch）
-- normal_damping = 115（一键 launch）
+- normal_damping = 65（一键 launch）
 - max_z_velocity = 0.014 m/s（一键 launch）
 - max_penetration = 0.030 m
 - max_lift = 0.050 m
-- jacobian_damping = 0.14（一键 launch）
+- jacobian_damping = 0.10（一键 launch）
 - max_joint_velocity = 0.08 rad/s（一键 launch）
 - max_joint_step = 0.004 rad/control-cycle（一键 launch）
 - min_safe_singular = 0.02
@@ -324,7 +338,7 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo s
 
 终端 2：运行长直线擦拭 + 平滑正弦曲面 + z 单轴导纳
 
-cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --prepare --mode x_wave --duration 90 --line-length 0.180 --line-speed 0.004 --wave-height 0.014 --wave-cycles 2.0 --desired-normal-force 6 --surface-stiffness 1000 --surface-damping 12 --normal-mass 1.5 --normal-damping 115 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08 --max-joint-step 0.004
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --prepare --mode x_wave --duration 90 --line-length 0.180 --line-speed 0.004 --wave-height 0.014 --wave-cycles 2.0 --surface-blend-time 2.0 --desired-normal-force 6 --surface-stiffness 1000 --surface-damping 12 --normal-mass 1.5 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
 
 终端 3：单独打开实时曲线窗口
 
@@ -412,15 +426,15 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo s
 
 更稳、更慢：
 
-cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --line-speed 0.003 --normal-damping 90 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --line-speed 0.003 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08
 
 x_line 更稳、更慢：
 
-cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_line --duration 60 --line-length 0.050 --line-speed 0.003 --step-height 0.0 --normal-damping 90 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08 --max-joint-step 0.004
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_line --duration 60 --line-length 0.050 --line-speed 0.003 --step-height 0.0 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
 
 x_bump 更稳、更慢：
 
-cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_bump --duration 75 --line-length 0.050 --line-speed 0.003 --bump-height 0.008 --bump-x-offset -0.016 --bump-sigma-x 0.014 --normal-damping 90 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08 --max-joint-step 0.004
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_bump --duration 75 --line-length 0.050 --line-speed 0.003 --bump-height 0.008 --bump-x-offset -0.016 --bump-sigma-x 0.014 --surface-blend-time 2.0 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
 
 显式不执行预备姿态，直接围绕当前姿态验证：
 
@@ -565,6 +579,7 @@ Gazebo 里应该看到：
 sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms 刷新一次，也就是约 5 Hz。
 绘图节点不会只保留 5 Hz 数据：每条约 30 Hz 的状态消息都会进入缓冲，5 Hz 只是屏幕重绘频率。
 窗口底部的 rx 显示实际接收频率，refresh 显示屏幕刷新频率，resets 显示检测到的 Gazebo/控制节点时间重置次数。
+blend 显示空间曲面渐入系数：settle 阶段为 0，默认再用 2 s 平滑增加到 1。
 
 图框 1：Surface/TCP height
 - surface_z：当前虚拟桌面/曲面高度。
@@ -578,13 +593,14 @@ sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms
 - desired_fz_N：期望法向力。
 - force_error_N = fz_virtual_N - desired_fz_N。
 - 如果 fz_virtual_N 经常贴近 0，说明虚拟 TCP 确实离开了虚拟表面或压入不足。
-- 如果 fz_virtual_N 大幅超过 desired_fz_N，并且 tcp_eq_err 为负，说明压入过深，需要更大的 normal_damping、更小的 wave_height 或更慢的 line_speed。
+- 如果 fz_virtual_N 大幅超过 desired_fz_N，并且 tcp_eq_err 为负，说明压入过深。先检查 vz 是否饱和，再降低 wave_height 或 line_speed，最后小幅调整 normal_damping。
 
 图框 3：Z velocity command
 - vz_raw：z 导纳原始速度。
 - vz_admittance：经过 TCP 高度安全限幅后的最终 z 速度命令。
 - 如果 vz_raw 经常比 vz_admittance 大，说明 min_tcp_z/max_tcp_z 限幅在工作。
 - 如果 vz_admittance 长时间顶在 max_z_velocity 附近，说明曲面变化相对当前 z 响应太快，可以降低 line_speed、降低 wave_height，或适当提高 max_z_velocity。
+- 旧版 D=115 配合显式欧拉时，速度线在正负限幅之间形成厚色带。当前精确离散 + D=65 后，正常目标是速度曲线围绕 0 连续变化，不再长期贴住正负限幅。
 
 图框 4：Contact/tracking error
 - tcp_eq_err：TCP 相对期望接触轨迹的 z 误差，越接近 0 越贴合。
@@ -643,12 +659,13 @@ sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms
      --max-z-velocity 0.050
 
 4. z 方向抖动
-   - 降低台阶高度：
-     --step-height 0.010
-   - 增大 z 阻尼：
-     --normal-damping 60
-   - 增大 Jacobian 阻尼：
-     --jacobian-damping 0.08
+   - 先确认当前代码已经使用一阶精确离散；旧版显式欧拉配大阻尼会产生数值振荡。
+   - 检查实时图中 vz 是否长期贴着正负 max_z_velocity，正常曲线不应形成厚色带。
+   - 降低曲面高度或移动速度：
+     --wave-height 0.010 --line-speed 0.003
+   - 保持一键 launch 的初始调参基线：
+     --normal-mass 1.5 --normal-damping 65 --surface-blend-time 2.0
+   - 不要把“继续增大 normal_damping”作为高频抖动的第一反应；先看速度限幅和离散算法。
 
 5. joint_error_max 变大并持续累积
    - 降低关节速度：
