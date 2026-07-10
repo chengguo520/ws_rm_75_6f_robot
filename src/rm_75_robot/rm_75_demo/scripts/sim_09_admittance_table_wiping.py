@@ -29,6 +29,7 @@ Gazebo 中可以用 arm_75_bumpy_wiping_moveit.launch 载入可见桌子和凸�
 from __future__ import print_function
 
 import argparse
+import json
 import math
 import sys
 import threading
@@ -66,6 +67,7 @@ DEFAULT_JOINT_STATES_TOPIC = "/arm/joint_states"
 TARGET_POSE_TOPIC = "/rm75_z_admittance_probe/target_pose"
 STATE_TOPIC = "/rm75_z_admittance_probe/state"
 MARKER_TOPIC = "/rm75_z_admittance_probe/markers"
+TUNING_COMMAND_TOPIC = "/rm75_z_admittance_probe/tuning_command"
 
 
 def clamp(value, lower, upper):
@@ -224,6 +226,40 @@ class ZAxisAdmittance(object):
         self.velocity = clamp(self.velocity, -self.max_velocity, self.max_velocity)
         self.acceleration = (self.velocity - previous_velocity) / dt
         return self.velocity, self.acceleration, force_error
+
+
+class TuningCommandMailbox(object):
+    """GUI回调只写入最新命令，控制循环在周期边界统一应用。"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pending = None
+
+    def callback(self, msg):
+        try:
+            payload = json.loads(msg.data)
+            action = payload.get("action")
+            if action not in ["start", "stop"]:
+                raise ValueError("action must be start or stop")
+            command = {"action": action}
+            if action == "start":
+                command.update({
+                    "normal_mass": clamp(float(payload["normal_mass"]), 0.1, 10.0),
+                    "normal_damping": clamp(float(payload["normal_damping"]), 0.0, 500.0),
+                    "desired_normal_force": clamp(float(payload["desired_normal_force"]), 0.0, 30.0),
+                })
+                if not all(math.isfinite(value) for key, value in command.items() if key != "action"):
+                    raise ValueError("tuning values must be finite")
+            with self._lock:
+                self._pending = command
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            rospy.logwarn("Ignoring invalid tuning command %r: %s", msg.data, exc)
+
+    def pop(self):
+        with self._lock:
+            command = self._pending
+            self._pending = None
+            return command
 
 
 def wait_for_joint_state(topic, timeout):
@@ -731,6 +767,8 @@ def parse_args(argv):
     parser.add_argument("--startup-timeout", type=float, default=45.0, help="Seconds to wait for joint states, controller, and TF.")
     parser.add_argument("--settle-time", type=float, default=4.0, help="Initial still time before the virtual wiping/bump motion starts.")
     parser.add_argument("--log-period", type=float, default=1.0, help="Throttled console log period in seconds.")
+    parser.add_argument("--start-paused", action="store_true", help="After settle, wait for the tuning GUI Start button.")
+    parser.add_argument("--auto-start", dest="start_paused", action="store_false", help="Run automatically after settle.")
 
     parser.add_argument("--prepare", action="store_true", default=False)
     parser.add_argument("--no-prepare", dest="prepare", action="store_false")
@@ -800,8 +838,10 @@ def parse_args(argv):
     parser.add_argument("--eef-link", default=EEF_LINK)
     parser.add_argument("--reference-frame", default=REFERENCE_FRAME)
     parser.add_argument("--joint-states-topic", default=DEFAULT_JOINT_STATES_TOPIC)
+    parser.add_argument("--tuning-command-topic", default=TUNING_COMMAND_TOPIC)
     parser.add_argument("--velocity-scaling", type=float, default=0.10)
     parser.add_argument("--acceleration-scaling", type=float, default=0.10)
+    parser.set_defaults(start_paused=False)
     args = parser.parse_args(argv)
     if args.auto_surface_z:
         args.surface_z = None
@@ -881,6 +921,9 @@ def main():
     target_pub = rospy.Publisher(TARGET_POSE_TOPIC, PoseStamped, queue_size=5)
     state_pub = rospy.Publisher(STATE_TOPIC, String, queue_size=5)
     marker_pub = rospy.Publisher(MARKER_TOPIC, MarkerArray, queue_size=1)
+    # GUI 只发布 JSON 调参命令；邮箱把 ROS 回调线程与 30 Hz 控制循环隔离。
+    tuning_mailbox = TuningCommandMailbox()
+    rospy.Subscriber(args.tuning_command_topic, String, tuning_mailbox.callback, queue_size=5)
 
     # 预备动作之后重新取真实反馈，作为 q_last_commanded 的起点。
     measured = wait_for_cached_joint_state(joint_cache, timeout=args.startup_timeout)
@@ -923,6 +966,7 @@ def main():
     print("Command topic:        ", COMMAND_TOPIC)
     print("Joint state topic:    ", args.joint_states_topic)
     print("State topic:          ", STATE_TOPIC)
+    print("Tuning topic:         ", args.tuning_command_topic)
     print("Marker topic:         ", MARKER_TOPIC)
     print("Recommended Gazebo:   ", "roslaunch rm_75_gazebo arm_75_bumpy_wiping_moveit.launch")
     print("EEF link:             ", args.eef_link)
@@ -959,6 +1003,7 @@ def main():
         args.settle_time, args.log_period, args.marker_lifetime
     ))
     print("Jacobian damping:     ", args.jacobian_damping)
+    print("Interactive start:    ", args.start_paused)
     if initial_xy_error > args.max_initial_xy_error:
         rospy.logwarn(
             "Initial link7 xy is %.3fm from the fixed wiping line center; verify the line center or use --line-center-x/--line-center-y.",
@@ -989,16 +1034,52 @@ def main():
     start_time = rospy.Time.now()
     last_time = start_time
     rate = rospy.Rate(args.rate)
+    is_running = not args.start_paused
+    run_id = 1 if is_running else 0
+    run_elapsed = 0.0
+    motion_elapsed = 0.0
 
     while not rospy.is_shutdown():
         now = rospy.Time.now()
         elapsed = (now - start_time).to_sec()
-        if elapsed > args.duration:
-            break
-        motion_elapsed = max(0.0, elapsed - max(0.0, args.settle_time))
-
         dt = clamp((now - last_time).to_sec(), 0.001, 0.2)
         last_time = now
+
+        tuning_command = tuning_mailbox.pop()
+        if tuning_command is not None:
+            if tuning_command["action"] == "start":
+                args.normal_mass = tuning_command["normal_mass"]
+                args.normal_damping = tuning_command["normal_damping"]
+                args.desired_normal_force = tuning_command["desired_normal_force"]
+                admittance_z.mass = args.normal_mass
+                admittance_z.damping = args.normal_damping
+                is_running = True
+                run_id += 1
+                run_elapsed = 0.0
+                rospy.loginfo(
+                    "TUNING START run_id=%d M=%.3f D=%.3f Fd=%.3f",
+                    run_id,
+                    args.normal_mass,
+                    args.normal_damping,
+                    args.desired_normal_force,
+                )
+            else:
+                is_running = False
+                admittance_z.velocity = 0.0
+                admittance_z.acceleration = 0.0
+                rospy.loginfo("TUNING STOP run_id=%d motion_elapsed=%.2f", run_id, motion_elapsed)
+
+        if elapsed >= max(0.0, args.settle_time) and is_running:
+            motion_elapsed += dt
+            run_elapsed += dt
+        if args.start_paused and is_running and run_elapsed >= args.duration:
+            is_running = False
+            admittance_z.velocity = 0.0
+            admittance_z.acceleration = 0.0
+            rospy.loginfo("TUNING AUTO STOP run_id=%d duration=%.2f", run_id, run_elapsed)
+        if not args.start_paused and motion_elapsed > args.duration:
+            break
+        run_state = "settle" if elapsed < args.settle_time else ("running" if is_running else "stopped")
 
         try:
             current_pose = tf_pose_reader.current_pose(args.reference_frame, args.eef_link, timeout=0.03)
@@ -1018,6 +1099,7 @@ def main():
         tcp_vz = (tcp_z - last_tcp_z) / dt
         last_tcp_z = tcp_z
         surface_blend = smooth_start_gain(motion_elapsed, args.surface_blend_time)
+        desired_penetration = args.desired_normal_force / max(1.0, args.surface_stiffness)
 
         if elapsed < args.settle_time:
             surface_source = "settle"
@@ -1071,28 +1153,42 @@ def main():
             args.max_contact_force,
         )
 
-        raw_vz, z_acceleration, force_error = admittance_z.step(
-            contact_force,
-            args.desired_normal_force,
-            dt,
-        )
-        vz, tcp_limit_state = clamp_vz_by_tcp_limits(raw_vz, tcp_z, min_tcp_z, max_tcp_z)
+        control_active = elapsed < args.settle_time or is_running
+        if control_active:
+            raw_vz, z_acceleration, force_error = admittance_z.step(
+                contact_force,
+                args.desired_normal_force,
+                dt,
+            )
+            vz, tcp_limit_state = clamp_vz_by_tcp_limits(raw_vz, tcp_z, min_tcp_z, max_tcp_z)
+        else:
+            raw_vz = 0.0
+            vz = 0.0
+            z_acceleration = 0.0
+            force_error = contact_force - args.desired_normal_force
+            tcp_limit_state = "paused"
 
         if elapsed < args.settle_time:
             xy_ref = list(hold_xy)
             xy_ref_velocity = [0.0, 0.0]
         elif args.mode in ["x_line", "x_bump", "x_wave"]:
             xy_ref, xy_ref_velocity = line_path.sample(motion_elapsed)
+            if not is_running:
+                xy_ref_velocity = [0.0, 0.0]
         else:
             xy_ref = list(hold_xy)
             xy_ref_velocity = [0.0, 0.0]
 
         # z_probe 模式下 x/y 只是保持；x_line/x_bump/x_wave 模式下 x 加入
         # 慢速往复参考，y 仍然固定。这样每次只新增一个自由度，便于定位问题。
-        vx = xy_ref_velocity[0] + args.xy_hold_gain * (xy_ref[0] - link_xyz[0])
-        vy = xy_ref_velocity[1] + args.xy_hold_gain * (xy_ref[1] - link_xyz[1])
-        vx = clamp(vx, -args.max_xy_velocity, args.max_xy_velocity)
-        vy = clamp(vy, -args.max_xy_velocity, args.max_xy_velocity)
+        if control_active:
+            vx = xy_ref_velocity[0] + args.xy_hold_gain * (xy_ref[0] - link_xyz[0])
+            vy = xy_ref_velocity[1] + args.xy_hold_gain * (xy_ref[1] - link_xyz[1])
+            vx = clamp(vx, -args.max_xy_velocity, args.max_xy_velocity)
+            vy = clamp(vy, -args.max_xy_velocity, args.max_xy_velocity)
+        else:
+            vx = 0.0
+            vy = 0.0
         cartesian_velocity = [vx, vy, vz]
 
         measured_joints = joint_cache.current_ordered()
@@ -1146,16 +1242,22 @@ def main():
             joint_error_samples.append(max_abs(joint_error))
 
         state_text = (
-            "elapsed={:.2f} mode={} xy_ref={} link_xyz={} link7_z_axis={} tool_down_score={:.4f} "
+            "elapsed={:.2f} mode={} run_state={} run_id={} run_elapsed={:.2f} xy_ref={} link_xyz={} link7_z_axis={} tool_down_score={:.4f} "
             "tcp_z={:.4f} base_surface_z={:.4f} "
             "surface_source={} surface_blend={:.3f} surface_step={:.4f} surface_z={:.4f} eq_tcp_z={:.4f} tcp_eq_err={:.4f} "
             "bump_center={} penetration={:.4f} "
             "fz_virtual_N={:.3f} desired_fz_N={:.3f} force_error_N={:.3f} "
+            "control_rate_hz={:.2f} normal_mass={:.3f} normal_damping={:.3f} "
+            "surface_stiffness={:.3f} surface_damping={:.3f} max_z_velocity={:.4f} "
+            "line_length={:.4f} line_speed={:.4f} wave_height={:.4f} wave_cycles={:.3f} surface_blend_time={:.3f} "
             "vz_raw={:.4f} vz_admittance={:.4f} tcp_limit={} cartesian_velocity={} "
             "xy_error={:.4f} qdot_max={:.4f} min_singular={:.5f} joint_error_max={:.4f}"
         ).format(
             elapsed,
             args.mode,
+            run_state,
+            run_id,
+            run_elapsed,
             fmt([xy_ref[0], xy_ref[1]]),
             fmt3(link_xyz),
             fmt3(link_z_axis),
@@ -1173,6 +1275,17 @@ def main():
             contact_force,
             args.desired_normal_force,
             force_error,
+            args.rate,
+            args.normal_mass,
+            args.normal_damping,
+            args.surface_stiffness,
+            args.surface_damping,
+            args.max_z_velocity,
+            args.line_length,
+            args.line_speed,
+            args.wave_height,
+            args.wave_cycles,
+            args.surface_blend_time,
             raw_vz,
             vz,
             tcp_limit_state,
@@ -1186,8 +1299,10 @@ def main():
 
         rospy.loginfo_throttle(
             max(0.1, args.log_period),
-            "mode=%s x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f blend=%.2f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
+            "mode=%s state=%s run=%d x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f blend=%.2f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
             args.mode,
+            run_state,
+            run_id,
             link_xyz[0],
             xy_ref[0],
             tcp_z,

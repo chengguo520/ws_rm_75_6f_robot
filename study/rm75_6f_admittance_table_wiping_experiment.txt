@@ -80,9 +80,11 @@ ROS 框架关系
      x_wave：x 长直线往复，y 固定，z 导纳响应平滑正弦曲面。
 
 5. sim_09_admittance_live_plot.py
-   - 只订阅 /rm75_z_admittance_probe/state，不发布任何控制命令。
+   - 订阅 /rm75_z_admittance_probe/state，并发布 /rm75_z_admittance_probe/tuning_command。
+   - 不直接发布关节命令；Start/Stop 和参数由 sim_09 控制节点在 30 Hz 周期边界应用。
    - 实时画出 surface_z、eq_tcp_z、tcp_z、fz_virtual_N、desired_fz_N、vz_admittance、tcp_eq_err 等曲线。
    - 主要用于后续调参：把“曲面高度变化 -> 虚拟接触力变化 -> z 导纳速度 -> TCP 高度误差”放在同一时间轴上看。
+   - 默认把每条约 30 Hz 状态消息持续写入 state.csv，关闭窗口或停止 roslaunch 时保存 plot.png。
 
 关键 topic：
 
@@ -111,6 +113,12 @@ ROS 框架关系
    - 类型：visualization_msgs/MarkerArray
    - 用于 RViz 可视化 TCP、擦拭块、虚拟桌面、擦拭线、空间凸起。
    - 这个 topic 不参与控制，只帮助看懂“机械臂到底在擦哪里”。
+
+7. /rm75_z_admittance_probe/tuning_command
+   - 类型：std_msgs/String，内容是 JSON。
+   - Start 示例：{"action":"start","normal_mass":1.5,"normal_damping":65.0,"desired_normal_force":6.0}
+   - Stop 示例：{"action":"stop"}
+   - ROS 回调只把最新命令写入线程安全邮箱，主控制循环再验证并应用。
 
 数据流/控制流程
 ---------------
@@ -279,7 +287,34 @@ q_des = q_last_commanded + q_dot * dt
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch
 
 这条命令默认会给 sim_09 传入 --prepare。
+这条命令也默认传入 --start-paused：完成准备动作和 4 s settle 后，机械臂停在线中心，等待曲线窗口的 Apply & Start。
 这条命令也会默认启动实时曲线窗口 sim_09_admittance_live_plot.py，窗口显示最近 60 秒的高度、力、速度和误差曲线。
+实时曲线节点默认同时保存本轮完整 CSV 和曲线 PNG，输出根目录为：
+
+/home/ros/ws_rm_75_6f_robot/study/data/sim09_runs
+
+每次启动会创建独立目录，例如：
+
+sim09_20260710_120000_pid12345/
+  state.csv
+  plot.png
+
+state.csv 在实验运行期间持续写入，每约 30 条消息刷新一次磁盘。
+plot.png 在关闭图窗或停止 roslaunch 时保存，并把默认 90 s 实验的完整缓冲画到一张图中。
+这些运行数据已由 study/data/sim09_runs/.gitignore 忽略，不会混入 Git 代码提交。
+
+临时关闭自动保存：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_save_data:=false
+
+修改保存根目录：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_output_dir:=/tmp/sim09_runs
+
+如果需要恢复旧版“settle 后自动开始”的行为：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch start_mode_arg:=--auto-start
+
 如果只想跑 Gazebo/RViz 和控制，不开曲线窗口：
 
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot:=false
@@ -343,6 +378,8 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo s
 终端 3：单独打开实时曲线窗口
 
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_live_plot.py --window 60
+
+单独打开时也默认保存。关闭自动保存可以加 --save-data false；更改目录可以加 --output-dir /tmp/sim09_runs。
 
 如果图窗打不开，先确认当前终端有图形显示环境；如果缺 matplotlib：
 
@@ -574,12 +611,69 @@ Gazebo 里应该看到：
 脚本：
 /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_09_admittance_live_plot.py
 
-它只订阅 /rm75_z_admittance_probe/state，不参与控制。
+它订阅状态并发布调参命令，但不直接发布关节控制命令。
 一键 launch 默认 plot=true，会自动打开实时曲线窗口。
 sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms 刷新一次，也就是约 5 Hz。
 绘图节点不会只保留 5 Hz 数据：每条约 30 Hz 的状态消息都会进入缓冲，5 Hz 只是屏幕重绘频率。
 窗口底部的 rx 显示实际接收频率，refresh 显示屏幕刷新频率，resets 显示检测到的 Gazebo/控制节点时间重置次数。
 blend 显示空间曲面渐入系数：settle 阶段为 0，默认再用 2 s 平滑增加到 1。
+
+交互式调参控制条
+------------------
+曲线窗口底部有三个键盘输入框：
+
+- M (kg)：normal_mass，允许范围 0.3 到 5.0。
+- D (N s/m)：normal_damping，允许范围 10 到 120。
+- Fd (N)：desired_normal_force，允许范围 1 到 15。
+
+点击白色输入框后用键盘输入数字。非数字、NaN、Inf 或超范围数值不会发送，按钮右侧会显示红色 invalid input。
+
+按钮语义：
+
+1. Apply & Start
+   - 一次性读取并发送三个输入框当前值。
+   - 控制节点在下一个 30 Hz 周期应用参数。
+   - run_id 加 1，run_elapsed 从 0 重新计时。
+   - 第一次 Start 从擦拭线中心开始；Stop 后再次 Start 从暂停位置继续，不让 x_ref 跳回中心。
+
+2. Stop
+   - 冻结 vx、vy、vz 为 0，关节位置控制器保持当前姿态。
+   - motion_elapsed 冻结，因此曲面相位和 x 参考位置也冻结。
+   - 关闭曲线窗口前也会自动发送一次 Stop。
+
+窗口中的 controller 状态行显示当前已经生效的 run_state、run_id、M、D、Fd 和 run_elapsed。
+输入框中的值只有点击 Apply & Start 后才生效，只编辑文本不会改变控制器。
+交互模式把 duration=90 解释为“单个 run_id 的最长运行时间”：到 90 s 自动 Stop，但节点和图窗继续等待下一组参数。
+当前 18 cm、0.004 m/s 的往复轨迹周期约为 90 s，因此每个完整 run_id 会覆盖一整周期，便于公平比较参数。
+也可以提前按 Stop；全部实验完成后按 Ctrl+C 结束并保存 CSV/PNG。
+
+自动保存的数据怎么读
+--------------------
+每次运行目录里有两个文件：
+
+1. state.csv
+   - 每条 /rm75_z_admittance_probe/state 消息保存一行，采样频率通常约 30 Hz。
+   - wall_time、ros_time、elapsed 用于对齐真实时间、ROS 仿真时间和本轮实验时间。
+   - mode、run_state、run_id、run_elapsed、surface_source、tcp_limit、reset_index 用于判断控制状态、调参分段和 Gazebo Reset。
+   - normal_mass、normal_damping、desired_fz_N、surface_stiffness、surface_damping 是后续参数对比的核心列。
+   - surface_z、eq_tcp_z、tcp_z、fz_virtual_N、force_error_N、vz_admittance、tcp_eq_err、xy_error 是后续定量指标的输入。
+   - xy_ref、link_xyz、link7_z_axis、cartesian_velocity 已展开为独立数值列，便于直接用 Python、LibreOffice 或 pandas 分析。
+   - raw_state 保留原始 ROS 字符串，方便未来字段解析规则改变后复核。
+
+2. plot.png
+   - 保存关闭窗口时的四组曲线。
+   - 默认 max_samples=6000，在 30 Hz 下约能覆盖 200 s；当前 90 s 实验可以完整保存。
+
+查看最近一次运行目录：
+
+cd /home/ros/ws_rm_75_6f_robot && ls -dt study/data/sim09_runs/sim09_* | head -1
+
+检查所有 CSV/PNG 是否生成：
+
+cd /home/ros/ws_rm_75_6f_robot && find study/data/sim09_runs -maxdepth 2 -type f
+
+正常关闭图窗或按 Ctrl+C 停止 roslaunch 时，会同时得到 CSV 和 PNG。
+如果进程被 kill -9 或系统异常退出，PNG 可能来不及保存；CSV 每秒刷新一次，因此通常只损失最后不到一秒的数据。
 
 图框 1：Surface/TCP height
 - surface_z：当前虚拟桌面/曲面高度。
