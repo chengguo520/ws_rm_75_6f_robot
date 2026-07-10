@@ -347,7 +347,9 @@ class StraightLinePath(object):
         self.period = 4.0 * self.half_length / self.line_speed
 
     def sample(self, elapsed):
-        phase = (elapsed % self.period) / self.period
+        # settle 阶段参考点保持在线段中心，因此往复轨迹也从中心起步。
+        # 四分之一周期相移让 x_ref 在切换瞬间位置连续，再以 line_speed 向 +x 运动。
+        phase = ((elapsed + 0.25 * self.period) % self.period) / self.period
         if phase < 0.5:
             ratio = -1.0 + 4.0 * phase
             vx = self.line_speed

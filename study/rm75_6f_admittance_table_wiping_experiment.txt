@@ -79,6 +79,11 @@ ROS 框架关系
      x_bump：x 慢速直线往复，y 固定，z 导纳响应空间高斯凸起。
      x_wave：x 长直线往复，y 固定，z 导纳响应平滑正弦曲面。
 
+5. sim_09_admittance_live_plot.py
+   - 只订阅 /rm75_z_admittance_probe/state，不发布任何控制命令。
+   - 实时画出 surface_z、eq_tcp_z、tcp_z、fz_virtual_N、desired_fz_N、vz_admittance、tcp_eq_err 等曲线。
+   - 主要用于后续调参：把“曲面高度变化 -> 虚拟接触力变化 -> z 导纳速度 -> TCP 高度误差”放在同一时间轴上看。
+
 关键 topic：
 
 1. /arm/arm_joint_controller/command
@@ -96,6 +101,7 @@ ROS 框架关系
 4. /rm75_z_admittance_probe/state
    - 类型：std_msgs/String
    - 包含 link_xyz、tcp_z、surface_z、penetration、fz_virtual_N、vz_admittance、joint_error_max 等诊断量。
+   - sim_09_admittance_live_plot.py 解析这个 topic 生成实时曲线。
 
 5. /rm75_z_admittance_probe/target_pose
    - 类型：geometry_msgs/PoseStamped
@@ -259,6 +265,19 @@ q_des = q_last_commanded + q_dot * dt
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch
 
 这条命令默认会给 sim_09 传入 --prepare。
+这条命令也会默认启动实时曲线窗口 sim_09_admittance_live_plot.py，窗口显示最近 60 秒的高度、力、速度和误差曲线。
+如果只想跑 Gazebo/RViz 和控制，不开曲线窗口：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot:=false
+
+如果想不看 RViz，只看 Gazebo 和实时曲线：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch use_rviz:=false plot:=true
+
+如果想把曲线窗口时间轴放长到 120 秒：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_window:=120
+
 这里的 prepare_joints 是专门为擦拭选的准备姿态：link7 局部 Z 轴主要朝向 base_link 的 -Z，也就是法兰/擦拭面朝向桌面。
 当前一键 launch 默认 mode=x_wave、line_length=0.180，也就是沿 18 cm 长直线擦过平滑正弦曲面。
 脚本启动时会打印：
@@ -306,6 +325,14 @@ cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo s
 终端 2：运行长直线擦拭 + 平滑正弦曲面 + z 单轴导纳
 
 cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --prepare --mode x_wave --duration 90 --line-length 0.180 --line-speed 0.004 --wave-height 0.014 --wave-cycles 2.0 --desired-normal-force 6 --surface-stiffness 1000 --surface-damping 12 --normal-mass 1.5 --normal-damping 115 --max-z-velocity 0.014 --jacobian-damping 0.14 --max-joint-velocity 0.08 --max-joint-step 0.004
+
+终端 3：单独打开实时曲线窗口
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_live_plot.py --window 60
+
+如果图窗打不开，先确认当前终端有图形显示环境；如果缺 matplotlib：
+
+sudo apt install python3-matplotlib
 
 如果担心工作空间或桌边，先用保守线长跑一遍：
 
@@ -527,6 +554,56 @@ Gazebo 里应该看到：
 
 - max_xy_error：
   x/y 参考点和 link7 实际 x/y 的最大平面误差。
+
+实时曲线图怎么读
+----------------
+脚本：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_09_admittance_live_plot.py
+
+它只订阅 /rm75_z_admittance_probe/state，不参与控制。
+一键 launch 默认 plot=true，会自动打开实时曲线窗口。
+sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms 刷新一次，也就是约 5 Hz。
+绘图节点不会只保留 5 Hz 数据：每条约 30 Hz 的状态消息都会进入缓冲，5 Hz 只是屏幕重绘频率。
+窗口底部的 rx 显示实际接收频率，refresh 显示屏幕刷新频率，resets 显示检测到的 Gazebo/控制节点时间重置次数。
+
+图框 1：Surface/TCP height
+- surface_z：当前虚拟桌面/曲面高度。
+- eq_tcp_z：为了产生期望法向力，TCP 应该到达的平衡高度。
+- tcp_z：TF 反馈出来的虚拟 TCP 实际高度。
+- 如果 surface_z 起伏明显，但 tcp_z 不跟，先看图框 3 的 vz 是否被限幅，再看图框 4 的 tcp_eq_err。
+- 如果 tcp_z 基本贴着 eq_tcp_z，说明虚拟接触点在数据上没有悬空；Gazebo 里看到的悬空多半是可视法兰和虚拟 TCP 偏置不一致。
+
+图框 2：Normal force
+- fz_virtual_N：虚拟法向力。
+- desired_fz_N：期望法向力。
+- force_error_N = fz_virtual_N - desired_fz_N。
+- 如果 fz_virtual_N 经常贴近 0，说明虚拟 TCP 确实离开了虚拟表面或压入不足。
+- 如果 fz_virtual_N 大幅超过 desired_fz_N，并且 tcp_eq_err 为负，说明压入过深，需要更大的 normal_damping、更小的 wave_height 或更慢的 line_speed。
+
+图框 3：Z velocity command
+- vz_raw：z 导纳原始速度。
+- vz_admittance：经过 TCP 高度安全限幅后的最终 z 速度命令。
+- 如果 vz_raw 经常比 vz_admittance 大，说明 min_tcp_z/max_tcp_z 限幅在工作。
+- 如果 vz_admittance 长时间顶在 max_z_velocity 附近，说明曲面变化相对当前 z 响应太快，可以降低 line_speed、降低 wave_height，或适当提高 max_z_velocity。
+
+图框 4：Contact/tracking error
+- tcp_eq_err：TCP 相对期望接触轨迹的 z 误差，越接近 0 越贴合。
+- penetration：虚拟压入量，稳定时应接近 desired_normal_force / surface_stiffness。
+- xy_error：x/y 平面参考和实际 link7 的误差。
+- 如果 tcp_eq_err 小但 xy_error 大，说明 z 柔顺本身没问题，主要是 x/y 跟踪问题。
+- 当前往复轨迹已经改为从擦拭线中心连续起步，不再在 settle 结束后直接把 x_ref 切到线段端点。
+- 如果 xy_error 仍在 settle 结束后突然变大，检查 line_speed、max_xy_velocity 和 xy_hold_gain，而不是先调 z 导纳参数。
+
+后续调参时的优先顺序：
+1. 先保证图框 1 里 tcp_z 能跟随 eq_tcp_z，不要只看 Gazebo 法兰外观。
+2. 再看图框 2 的 fz_virtual_N 是否围绕 desired_fz_N，不要长期贴 0 或长期过大。
+3. 再看图框 3 的 vz 是否频繁撞限幅。
+4. 最后看图框 4 的 xy_error，判断 x/y 跟踪速度和保持增益是否合适。
+
+绘图节点自身排错：
+- 如果 backend=TkAgg 或 Qt5Agg，这是正常图形后端，不应再出现“无 GUI 后端”的误报警。
+- 如果 backend=Agg，说明当前终端没有可用图形后端；检查 DISPLAY，或手动传 --backend TkAgg。
+- Gazebo Reset 或 sim_09 控制节点重启后 elapsed 会回到 0。绘图节点会自动清空上一轮缓冲，resets 加 1，避免新旧时间轴混在一起。
 
 排错 checklist
 --------------

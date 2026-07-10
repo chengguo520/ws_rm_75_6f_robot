@@ -43,6 +43,9 @@
   <arg name="use_rviz" default="true"/>
   <arg name="rviz_software_rendering" default="true"/>
   <arg name="gazebo_software_rendering" default="false"/>
+  <arg name="plot" default="true"/>
+  <arg name="plot_window" default="60.0"/>
+  <arg name="plot_refresh_ms" default="200"/>
 
   <include file="$(find rm_75_gazebo)/launch/arm_75_bumpy_wiping_moveit.launch">
     <arg name="paused" value="$(arg paused)" />
@@ -59,4 +62,12 @@
     name="sim_09_admittance_table_wiping"
     output="screen"
     args="$(arg prepare_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime)" />
+
+  <node
+    if="$(arg plot)"
+    pkg="rm_75_demo"
+    type="sim_09_admittance_live_plot.py"
+    name="sim_09_admittance_live_plot"
+    output="screen"
+    args="--window $(arg plot_window) --refresh-ms $(arg plot_refresh_ms)" />
 </launch>
