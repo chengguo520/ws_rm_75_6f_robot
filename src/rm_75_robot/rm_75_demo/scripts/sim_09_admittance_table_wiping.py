@@ -1320,7 +1320,11 @@ def main():
         if min_singular < args.min_safe_singular:
             rospy.logwarn_throttle(1.0, "Jacobian is near singular: min_singular=%.5f", min_singular)
 
-        rate.sleep()
+        try:
+            rate.sleep()
+        except rospy.ROSInterruptException:
+            # Ctrl+C 是正常结束路径，不需要向学习者打印一整段异常堆栈。
+            break
 
     print("Experiment finished.")
     if tcp_z_samples:

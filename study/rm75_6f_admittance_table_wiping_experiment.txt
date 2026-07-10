@@ -675,6 +675,22 @@ cd /home/ros/ws_rm_75_6f_robot && find study/data/sim09_runs -maxdepth 2 -type f
 正常关闭图窗或按 Ctrl+C 停止 roslaunch 时，会同时得到 CSV 和 PNG。
 如果进程被 kill -9 或系统异常退出，PNG 可能来不及保存；CSV 每秒刷新一次，因此通常只损失最后不到一秒的数据。
 
+无界面批量记录与自动统计
+------------------------
+控制变量实验可以关闭 Gazebo/RViz 窗口，但 Gazebo 物理和控制节点仍会运行：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch gui:=false use_rviz:=false plot_backend:=Agg plot_max_samples:=40000 duration:=90
+
+Agg 模式不会创建参数输入框；它只在后台按约 30 Hz 保存 CSV，并在 roslaunch 退出时生成完整 PNG。参数命令仍通过 tuning_command topic 发送。
+
+分析某次实验：
+
+cd /home/ros/ws_rm_75_6f_robot && python3 src/rm_75_robot/rm_75_demo/scripts/sim_09_tuning_analyze.py --plot study/data/sim09_runs/sim09_时间戳_pid进程号/state.csv
+
+分析器按 run_id 分组，并生成同目录 summary.csv；加 --plot 时还会生成全部轮次的 comparison.png。它先检查缺失值、重复时刻、时间倒退、单轮参数是否意外改变，以及实际采样率是否在 25~35 Hz。启动后的前 5 s 作为调参瞬态；稳态力误差 RMS、峰值、偏差和 z/xy 跟踪指标从 5 s 后计算，同时 force_peak_all_N 保留全过程峰值。
+
+当前仿真学习验收线：力均值偏差不超过 Fd 的 5%，力误差 RMS 不超过 10%，稳态峰值不超过 25%；eq_err RMS/峰值不超过 1/2 mm；z 速度饱和率不超过 1%；xy RMS/峰值不超过 5/10 mm；min_singular 不低于 0.02；joint_error_max 不超过 0.01 rad；稳态不失去虚拟接触。这些阈值用于同一曲面和速度下比较参数，不是实物安全标准。
+
 图框 1：Surface/TCP height
 - surface_z：当前虚拟桌面/曲面高度。
 - eq_tcp_z：为了产生期望法向力，TCP 应该到达的平衡高度。

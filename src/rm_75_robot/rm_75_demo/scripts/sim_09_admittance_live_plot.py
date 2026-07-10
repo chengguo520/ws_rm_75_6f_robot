@@ -351,7 +351,7 @@ class LivePlotter(object):
         sample = self.buffer.append_from_text(msg.data)
         self.recorder.append(sample, msg.data)
 
-    def build_figure(self):
+    def build_figure(self, include_controls=True):
         fig, axes = self.plt.subplots(len(PLOT_GROUPS), 1, sharex=True, figsize=(11.5, 8.5))
         self.figure = fig
         self.axes = list(axes)
@@ -371,8 +371,10 @@ class LivePlotter(object):
 
         self.axes[-1].set_xlabel("elapsed time (s)")
         self.status_text = fig.text(0.01, 0.012, "waiting for {}".format(self.args.state_topic), fontsize=9)
-        fig.tight_layout(rect=[0.0, 0.20, 1.0, 0.98])
-        self.build_tuning_controls(fig)
+        bottom_margin = 0.20 if include_controls else 0.07
+        fig.tight_layout(rect=[0.0, bottom_margin, 1.0, 0.98])
+        if include_controls:
+            self.build_tuning_controls(fig)
         fig.canvas.mpl_connect("close_event", self.handle_close)
         return fig
 
@@ -567,7 +569,9 @@ class LivePlotter(object):
             original_window = self.args.window
             try:
                 # 关闭时临时扩展时间窗，让 PNG 包含本轮缓冲中的完整实验曲线。
-                self.args.window = max(original_window, (samples[-1].get("elapsed") or 0.0) + 1.0)
+                first_time = samples[0].get("elapsed") or 0.0
+                last_time = samples[-1].get("elapsed") or first_time
+                self.args.window = max(1.0, last_time - first_time + 1.0)
                 self.update_lines(0)
                 self.figure.savefig(self.recorder.png_path, dpi=160)
                 rospy.loginfo("Saved sim_09 run: samples=%d csv=%s png=%s", message_count, self.recorder.csv_path, self.recorder.png_path)
@@ -586,10 +590,18 @@ class LivePlotter(object):
         rospy.loginfo("sim_09 tuning controls publishing to %s", self.args.tuning_topic)
         if self.recorder.enabled:
             rospy.loginfo("sim_09 recording CSV/PNG under %s", self.recorder.run_dir)
-        if is_noninteractive_backend(backend):
-            rospy.logwarn("Matplotlib backend is %s; a live GUI window may not open. Check DISPLAY or pass --backend TkAgg.", backend)
+        headless = is_noninteractive_backend(backend)
+        if headless:
+            rospy.loginfo("Matplotlib backend is %s; running as a headless CSV/PNG recorder.", backend)
 
-        fig = self.build_figure()
+        fig = self.build_figure(include_controls=not headless)
+        rospy.on_shutdown(self.save_outputs)
+        if headless:
+            # 非交互后端的 show() 会立即返回。由 ROS spin 保持订阅，退出时再绘制完整 PNG。
+            rospy.spin()
+            self.save_outputs()
+            return
+
         # FuncAnimation 对象必须保存在 self 上，否则会被 Python 回收，窗口不再刷新。
         self.animation = self.animation_class(
             fig,
@@ -598,7 +610,6 @@ class LivePlotter(object):
             blit=False,
             cache_frame_data=False,
         )
-        rospy.on_shutdown(self.save_outputs)
         self.plt.show()
         self.save_outputs()
 

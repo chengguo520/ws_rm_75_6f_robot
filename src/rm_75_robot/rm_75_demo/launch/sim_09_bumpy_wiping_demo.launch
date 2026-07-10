@@ -49,6 +49,8 @@
   <arg name="plot" default="true"/>
   <arg name="plot_window" default="60.0"/>
   <arg name="plot_refresh_ms" default="200"/>
+  <arg name="plot_max_samples" default="6000"/>
+  <arg name="plot_backend" default="TkAgg"/>
   <arg name="plot_save_data" default="true"/>
   <arg name="plot_output_dir" default="$(env HOME)/ws_rm_75_6f_robot/study/data/sim09_runs"/>
 
@@ -74,5 +76,5 @@
     type="sim_09_admittance_live_plot.py"
     name="sim_09_admittance_live_plot"
     output="screen"
-    args="--window $(arg plot_window) --refresh-ms $(arg plot_refresh_ms) --save-data $(arg plot_save_data) --output-dir $(arg plot_output_dir) --tuning-topic $(arg tuning_topic) --initial-normal-mass $(arg normal_mass) --initial-normal-damping $(arg normal_damping) --initial-desired-force $(arg desired_normal_force)" />
+    args="--window $(arg plot_window) --refresh-ms $(arg plot_refresh_ms) --max-samples $(arg plot_max_samples) --backend $(arg plot_backend) --save-data $(arg plot_save_data) --output-dir $(arg plot_output_dir) --tuning-topic $(arg tuning_topic) --initial-normal-mass $(arg normal_mass) --initial-normal-damping $(arg normal_damping) --initial-desired-force $(arg desired_normal_force)" />
 </launch>
