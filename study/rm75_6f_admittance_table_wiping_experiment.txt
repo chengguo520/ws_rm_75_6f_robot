@@ -232,7 +232,7 @@ q_des = q_last_commanded + q_dot * dt
 - 一键 launch 默认 duration = 90 s
 - 脚本默认 duration = 60 s
 - rate = 30 Hz
-- command_horizon = 0.16 s
+- command_horizon = 0.10 s（当前 position JointTrajectoryController 的验证基线）
 - stamp_mode = future
 - lead_time = 0.03 s
 - startup_timeout = 45 s
@@ -810,8 +810,9 @@ period = 2*line_length/line_speed + 2*line_turn_time*(1 - 2/pi)
      --max-joint-velocity 0.16
    - 降低每周期关节步长：
      --max-joint-step 0.008
-   - 增大 command_horizon：
-     --command-horizon 0.16
+   - 不要直接增大 command_horizon。当前 30 Hz position controller 的验证基线是
+     --command-horizon 0.10；若需要修改，应固定其他参数在 0.08/0.10/0.12 s
+     范围内复验 joint_error_max 和 xy_error，而不是仅凭直觉拉长执行时间。
 
 6. x_line 模式 x 跟随不明显
    - 增大线长：
