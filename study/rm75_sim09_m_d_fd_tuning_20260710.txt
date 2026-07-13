@@ -29,6 +29,17 @@ RM75-6F sim_09 M / D / Fd 控制变量调参记录（2026-07-10）
 
 本轮启动时 recorder 仍使用 6000 点缓冲，因此 plot.png 只覆盖最后约 200 s；state.csv、summary.csv 和 comparison.png 覆盖完整 8 轮。代码现已暴露 plot_max_samples，后续长批次使用 40000 点即可保存完整实时曲线。
 
+对比图定义（2026-07-11 更新）
+------------------------------
+- comparison.png 只在选中至少两个 run 时生成；单次实验只有 plot.png 时域曲线和 summary.csv，不再伪装成“比较图”。
+- 本批 8 run 会自动识别为三个控制变量扫描：M 列只改变 M，D 列只改变 D，Fd 列只改变 Fd；其余两个参数固定为最常出现的基线 1.5 / 65 / 6。
+- 图的四行依次为 force RMS、稳态 force peak、tcp equilibrium error RMS、Z 速度饱和率。横坐标是参数的真实数值，因此使用带标记的折线，而不是没有趋势含义的单 run 柱子。
+- 同一基线配置的 run 2 与 run 8 会合并为均值；误差棒显示两次重复实验的最小/最大范围；黑色星号标记基线配置。
+- 当前图路径仍为：study/data/sim09_runs/sim09_20260710_155707_pid19087/comparison.png
+
+重建图的命令：
+cd /home/ros/ws_rm_75_6f_robot && python3 src/rm_75_robot/rm_75_demo/scripts/sim_09_tuning_analyze.py --plot study/data/sim09_runs/sim09_20260710_155707_pid19087/state.csv
+
 数据质量
 --------
 - 正式批次共 8 个 run，每个 run 2699~2700 条 running 样本，持续 89.94~89.97 s。

@@ -687,9 +687,37 @@ Agg 模式不会创建参数输入框；它只在后台按约 30 Hz 保存 CSV�
 
 cd /home/ros/ws_rm_75_6f_robot && python3 src/rm_75_robot/rm_75_demo/scripts/sim_09_tuning_analyze.py --plot study/data/sim09_runs/sim09_时间戳_pid进程号/state.csv
 
-分析器按 run_id 分组，并生成同目录 summary.csv；加 --plot 时还会生成全部轮次的 comparison.png。它先检查缺失值、重复时刻、时间倒退、单轮参数是否意外改变，以及实际采样率是否在 25~35 Hz。启动后的前 5 s 作为调参瞬态；稳态力误差 RMS、峰值、偏差和 z/xy 跟踪指标从 5 s 后计算，同时 force_peak_all_N 保留全过程峰值。
+分析器按 run_id 分组，并生成同目录 summary.csv；只有选中至少两个 run 时，--plot 才会生成 comparison.png。单 run 只应查看 plot.png 的时域响应，不应生成没有对照对象的“comparison”。对于 M/D/Fd 控制变量实验，comparison.png 会按 M、D、Fd 三列分别画数值扫描折线，四行依次比较力 RMS、稳态力峰值、eq_err RMS、Z 速度饱和率；相同基线的重复 run 用均值和最小/最大范围误差棒显示。它先检查缺失值、重复时刻、时间倒退、单轮参数是否意外改变，以及实际采样率是否在 25~35 Hz。启动后的前 5 s 作为调参瞬态；稳态力误差 RMS、峰值、偏差和 z/xy 跟踪指标从 5 s 后计算，同时 force_peak_all_N 保留全过程峰值。
 
 当前仿真学习验收线：力均值偏差不超过 Fd 的 5%，力误差 RMS 不超过 10%，稳态峰值不超过 25%；eq_err RMS/峰值不超过 1/2 mm；z 速度饱和率不超过 1%；xy RMS/峰值不超过 5/10 mm；min_singular 不低于 0.02；joint_error_max 不超过 0.01 rad；稳态不失去虚拟接触。这些阈值用于同一曲面和速度下比较参数，不是实物安全标准。
+
+鲁棒性实验的周期换算
+--------------------
+改变 line_speed 时，不能继续固定 duration=90，否则各组覆盖的轨迹距离不同。当前三角往复轨迹走完“中心 -> 右端 -> 中心 -> 左端 -> 中心”的总路程是 2 * line_length，因此：
+
+duration = 2 * line_length / line_speed
+
+line_length=0.180 m 时，3/4/5/6 mm/s 分别使用 120/90/72/60 s。2026-07-10 的完整鲁棒性结果见：
+
+study/rm75_sim09_robustness_20260710.txt
+
+端点平滑换向与 XY 误差拆分（2026-07-11）
+------------------------------------------
+旧版 x 参考是三角波：位置连续，但在端点把参考速度从 +line_speed 瞬间变成 -line_speed。当前代码改为余弦速度混合：在每个端点附近，参考速度从 +V 经 0 平滑变到 -V，位置、速度和加速度连续；中段仍以 line_speed 匀速擦拭。
+
+--line-turn-time 控制一次端点速度混合的时长，默认 0.5 s。转向距离为 d=V*T/pi；在 V=4 mm/s 时 d 约 0.64 mm。完整周期更新为：
+
+period = 2*line_length/line_speed + 2*line_turn_time*(1 - 2/pi)
+
+因此默认 180 mm、4 mm/s、0.5 s 时 period 约为 90.36 s，一键 launch 默认 duration 已设为 91 s。
+
+状态和实时图现在新增：
+- x_error=x_ref-x_actual：沿擦拭线方向的跟踪误差。
+- y_error=y_ref-y_actual：横向偏离直线的误差。
+- xy_error=sqrt(x_error^2+y_error^2)：原有合成平面误差。
+- xy_ref_vx：参考轨迹 x 速度，用于观察端点是否平滑减速、反向。
+
+不要把 xy_error 直接称作“擦偏了直线”。只有 y_error 才直接表示横向擦偏；x_error 大通常表示沿线滞后或超前。
 
 图框 1：Surface/TCP height
 - surface_z：当前虚拟桌面/曲面高度。
@@ -790,8 +818,10 @@ cd /home/ros/ws_rm_75_6f_robot && python3 src/rm_75_robot/rm_75_demo/scripts/sim
      --line-length 0.080
    - 增大线速度，但先不要太大：
      --line-speed 0.012
-   - 如果 joint_error_max 同时变大，反而要降低速度：
-     --line-speed 0.006 --max-xy-velocity 0.012
+   - 端点换向使用 line_turn_time 的余弦减速/加速，不再用速度瞬时反向。
+   - 在 H=14 mm、V=6 mm/s 的仿真验证中，max_xy_velocity=0.018 通过 XY 指标；
+     先检查 min_singular 和 qdot_max，再决定是否继续提高。
+   - 详见：study/rm75_sim09_xy_smooth_turn_20260711.txt
 
 7. x_bump 模式没有明显碰到凸起
    - 检查 RESULT 里的 surface_step_span。

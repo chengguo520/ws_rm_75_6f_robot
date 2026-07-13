@@ -6,7 +6,7 @@
     be launched together with Gazebo instead of from a second terminal.
   -->
   <arg name="mode" default="x_wave"/>
-  <arg name="duration" default="90.0"/>
+  <arg name="duration" default="91.0"/>
   <arg name="startup_timeout" default="60.0"/>
   <arg name="settle_time" default="4.0"/>
   <!--
@@ -22,6 +22,7 @@
   <arg name="line_center_y" default="0.026"/>
   <arg name="line_length" default="0.180"/>
   <arg name="line_speed" default="0.004"/>
+  <arg name="line_turn_time" default="0.5"/>
   <arg name="step_height" default="0.0"/>
   <arg name="wave_height" default="0.014"/>
   <arg name="wave_cycles" default="2.0"/>
@@ -36,6 +37,8 @@
   <arg name="normal_mass" default="1.5"/>
   <arg name="normal_damping" default="65.0"/>
   <arg name="max_z_velocity" default="0.014"/>
+  <!-- Tangential tracker limit; raise only after checking X tracking at the target wiping speed. -->
+  <arg name="max_xy_velocity" default="0.018"/>
   <arg name="jacobian_damping" default="0.10"/>
   <arg name="max_joint_velocity" default="0.08"/>
   <arg name="max_joint_step" default="0.004"/>
@@ -68,7 +71,7 @@
     type="sim_09_admittance_table_wiping.py"
     name="sim_09_admittance_table_wiping"
     output="screen"
-    args="$(arg prepare_arg) $(arg start_mode_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime) --tuning-command-topic $(arg tuning_topic)" />
+    args="$(arg prepare_arg) $(arg start_mode_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --line-turn-time $(arg line_turn_time) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --max-xy-velocity $(arg max_xy_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime) --tuning-command-topic $(arg tuning_topic)" />
 
   <node
     if="$(arg plot)"

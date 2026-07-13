@@ -386,30 +386,55 @@ def smooth_start_gain(elapsed, duration):
 
 
 class StraightLinePath(object):
-    """x 方向慢速直线往复轨迹。
+    """x 方向带端点速度平滑的直线往复轨迹。
 
     这是从 z_probe 进入擦桌子的第一步：只让 TCP 沿 x 做短距离往返，
     y 仍然固定，z 仍然由刚刚验证通过的单轴导纳负责。
     """
 
-    def __init__(self, center_x, center_y, line_length, line_speed):
+    def __init__(self, center_x, center_y, line_length, line_speed, turn_time):
         self.center_x = center_x
         self.center_y = center_y
         self.half_length = max(0.005, 0.5 * abs(line_length))
         self.line_speed = max(0.001, abs(line_speed))
-        self.period = 4.0 * self.half_length / self.line_speed
+        # 在端点附近用半个余弦速度波完成 +V -> -V，消除旧三角波的速度突变。
+        # 转向距离 d=V*T/pi；默认 T=0.5 s 时，在 4 mm/s 下只有约 0.64 mm。
+        max_turn_time = 0.8 * math.pi * self.half_length / self.line_speed
+        self.turn_time = clamp(abs(turn_time), 0.02, max_turn_time)
+        self.turn_distance = self.line_speed * self.turn_time / math.pi
+        self.entry_duration = (self.half_length - self.turn_distance) / self.line_speed
+        self.cross_duration = 2.0 * self.entry_duration
+        self.period = 2.0 * self.entry_duration + self.cross_duration + 2.0 * self.turn_time
 
     def sample(self, elapsed):
-        # settle 阶段参考点保持在线段中心，因此往复轨迹也从中心起步。
-        # 四分之一周期相移让 x_ref 在切换瞬间位置连续，再以 line_speed 向 +x 运动。
-        phase = ((elapsed + 0.25 * self.period) % self.period) / self.period
-        if phase < 0.5:
-            ratio = -1.0 + 4.0 * phase
+        """返回位置连续、速度和加速度连续的 x/y 参考及其速度。"""
+        t = elapsed % self.period
+        edge_x = self.half_length - self.turn_distance
+        if t < self.entry_duration:
+            x = self.line_speed * t
             vx = self.line_speed
         else:
-            ratio = 3.0 - 4.0 * phase
-            vx = -self.line_speed
-        x = self.center_x + self.half_length * ratio
+            t -= self.entry_duration
+            if t < self.turn_time:
+                phase = math.pi * t / self.turn_time
+                x = edge_x + self.turn_distance * math.sin(phase)
+                vx = self.line_speed * math.cos(phase)
+            else:
+                t -= self.turn_time
+                if t < self.cross_duration:
+                    x = edge_x - self.line_speed * t
+                    vx = -self.line_speed
+                else:
+                    t -= self.cross_duration
+                    if t < self.turn_time:
+                        phase = math.pi * t / self.turn_time
+                        x = -edge_x - self.turn_distance * math.sin(phase)
+                        vx = -self.line_speed * math.cos(phase)
+                    else:
+                        t -= self.turn_time
+                        x = -edge_x + self.line_speed * t
+                        vx = self.line_speed
+        x += self.center_x
         return [x, self.center_y], [vx, 0.0]
 
 
@@ -789,6 +814,7 @@ def parse_args(argv):
 
     parser.add_argument("--line-length", type=float, default=0.180, help="x_line/x_wave wiping length in x direction, m.")
     parser.add_argument("--line-speed", type=float, default=0.004, help="x_line mode feed-forward x speed, m/s.")
+    parser.add_argument("--line-turn-time", type=float, default=0.5, help="Cosine velocity blending time at each x endpoint, s.")
     parser.add_argument("--line-center-x", type=float, default=DEFAULT_TABLE_CENTER_X, help="Wiping line center x in base_link, m.")
     parser.add_argument("--line-center-y", type=float, default=DEFAULT_TABLE_CENTER_Y, help="Wiping line center y in base_link, m.")
     parser.add_argument("--line-y-offset", type=float, default=0.0, help="Y offset from the fixed wiping line center, m.")
@@ -823,7 +849,7 @@ def parse_args(argv):
     parser.add_argument("--min-tcp-motion", type=float, default=0.004)
 
     parser.add_argument("--xy-hold-gain", type=float, default=1.8)
-    parser.add_argument("--max-xy-velocity", type=float, default=0.012)
+    parser.add_argument("--max-xy-velocity", type=float, default=0.018)
 
     parser.add_argument("--jacobian-damping", type=float, default=0.10)
     parser.add_argument("--max-joint-velocity", type=float, default=0.10)
@@ -905,6 +931,7 @@ def main():
         center_y=hold_xy[1] + args.line_y_offset,
         line_length=args.line_length,
         line_speed=args.line_speed,
+        turn_time=args.line_turn_time,
     )
     bump_center = [
         hold_xy[0] + args.bump_x_offset,
@@ -984,6 +1011,7 @@ def main():
     print("Initial TCP-surface:  ", "{:.4f}m".format(initial_z_gap))
     print("Initial min singular: ", "{:.5f}".format(initial_min_singular))
     print("Line length/speed:    ", "{:.4f}m / {:.4f}mps".format(args.line_length, args.line_speed))
+    print("Line turn/period:     ", "{:.3f}s / {:.3f}s".format(line_path.turn_time, line_path.period))
     print("Bump center xy:       ", fmt(bump_center))
     print("Bump height/sigma:    ", "{:.4f}m / [{:.4f}, {:.4f}]m".format(
         args.bump_height, args.bump_sigma_x, args.bump_sigma_y
@@ -1181,9 +1209,13 @@ def main():
 
         # z_probe 模式下 x/y 只是保持；x_line/x_bump/x_wave 模式下 x 加入
         # 慢速往复参考，y 仍然固定。这样每次只新增一个自由度，便于定位问题。
+        # 分开保存沿线 x 误差和横向 y 误差，避免把“跟不上参考点”误认为“擦偏直线”。
+        x_error = xy_ref[0] - link_xyz[0]
+        y_error = xy_ref[1] - link_xyz[1]
+        xy_error = math.hypot(x_error, y_error)
         if control_active:
-            vx = xy_ref_velocity[0] + args.xy_hold_gain * (xy_ref[0] - link_xyz[0])
-            vy = xy_ref_velocity[1] + args.xy_hold_gain * (xy_ref[1] - link_xyz[1])
+            vx = xy_ref_velocity[0] + args.xy_hold_gain * x_error
+            vy = xy_ref_velocity[1] + args.xy_hold_gain * y_error
             vx = clamp(vx, -args.max_xy_velocity, args.max_xy_velocity)
             vy = clamp(vy, -args.max_xy_velocity, args.max_xy_velocity)
         else:
@@ -1234,7 +1266,7 @@ def main():
 
         tcp_z_samples.append(tcp_z)
         link_x_samples.append(link_xyz[0])
-        xy_error_samples.append(math.hypot(xy_ref[0] - link_xyz[0], xy_ref[1] - link_xyz[1]))
+        xy_error_samples.append(xy_error)
         surface_step_samples.append(surface_step)
         fz_samples.append(contact_force)
         singular_samples.append(min_singular)
@@ -1248,10 +1280,10 @@ def main():
             "bump_center={} penetration={:.4f} "
             "fz_virtual_N={:.3f} desired_fz_N={:.3f} force_error_N={:.3f} "
             "control_rate_hz={:.2f} normal_mass={:.3f} normal_damping={:.3f} "
-            "surface_stiffness={:.3f} surface_damping={:.3f} max_z_velocity={:.4f} "
-            "line_length={:.4f} line_speed={:.4f} wave_height={:.4f} wave_cycles={:.3f} surface_blend_time={:.3f} "
+            "surface_stiffness={:.3f} surface_damping={:.3f} max_z_velocity={:.4f} max_xy_velocity={:.4f} "
+            "line_length={:.4f} line_speed={:.4f} line_turn_time={:.3f} wave_height={:.4f} wave_cycles={:.3f} surface_blend_time={:.3f} "
             "vz_raw={:.4f} vz_admittance={:.4f} tcp_limit={} cartesian_velocity={} "
-            "xy_error={:.4f} qdot_max={:.4f} min_singular={:.5f} joint_error_max={:.4f}"
+            "xy_ref_vx={:.4f} xy_ref_vy={:.4f} x_error={:.4f} y_error={:.4f} xy_error={:.4f} qdot_max={:.4f} min_singular={:.5f} joint_error_max={:.4f}"
         ).format(
             elapsed,
             args.mode,
@@ -1281,8 +1313,10 @@ def main():
             args.surface_stiffness,
             args.surface_damping,
             args.max_z_velocity,
+            args.max_xy_velocity,
             args.line_length,
             args.line_speed,
+            line_path.turn_time,
             args.wave_height,
             args.wave_cycles,
             args.surface_blend_time,
@@ -1290,7 +1324,11 @@ def main():
             vz,
             tcp_limit_state,
             fmt3(cartesian_velocity),
-            xy_error_samples[-1],
+            xy_ref_velocity[0],
+            xy_ref_velocity[1],
+            x_error,
+            y_error,
+            xy_error,
             max_abs(qdot),
             min_singular,
             max_abs(joint_error) if joint_error is not None else -1.0,
@@ -1299,12 +1337,13 @@ def main():
 
         rospy.loginfo_throttle(
             max(0.1, args.log_period),
-            "mode=%s state=%s run=%d x=%.4f x_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f blend=%.2f src=%s fz=%.2fN vz=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
+            "mode=%s state=%s run=%d x=%.4f x_ref=%.4f vx_ref=%.4f tcp_z=%.4f eq_err=%.4f down=%.3f step=%.4f blend=%.2f src=%s fz=%.2fN vz=%.4f x_err=%.4f y_err=%.4f xy_err=%.4f min_singular=%.5f joint_err=%.4f",
             args.mode,
             run_state,
             run_id,
             link_xyz[0],
             xy_ref[0],
+            xy_ref_velocity[0],
             tcp_z,
             tcp_equilibrium_error,
             tool_down_score,
@@ -1313,7 +1352,9 @@ def main():
             surface_source,
             contact_force,
             vz,
-            xy_error_samples[-1],
+            x_error,
+            y_error,
+            xy_error,
             min_singular,
             max_abs(joint_error) if joint_error is not None else -1.0,
         )
