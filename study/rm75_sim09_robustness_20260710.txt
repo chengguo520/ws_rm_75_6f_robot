@@ -80,4 +80,29 @@ case  H(mm)  V(mm/s)  力RMS(N)  eq_RMS(mm)  z饱和  xy_RMS(mm)  xy峰值(mm)  
 - 已复验 H=20 mm、V=6 mm/s：xy_rms=3.167 mm、xy_peak=6.4 mm，法向指标也通过；
   但 joint_error_max=0.0119 rad 超过 0.0100 rad 验收线，整体为 CHECK。
 - 因此旧结论“6 mm/s 因 XY 跟踪不通过”已失效；新的限制因素是 H=20 mm、V=6 mm/s
-  时的关节位置跟踪峰值。完整鲁棒性矩阵需要在当前控制器下重跑后，才能替换旧汇总图。
+时的关节位置跟踪峰值。完整鲁棒性矩阵需要在当前控制器下重跑后，才能替换旧汇总图。
+
+当前矩阵重跑方式（2026-07-13）
+------------------------------
+新基线使用 command_horizon=0.10 s、line_turn_time=0.5 s、max_xy_velocity=0.018 m/s。
+每组都用 gui:=false、headless:=true、use_rviz:=false、plot_backend:=Agg 和
+start_mode_arg:=--auto-start 启动。sim_09 控制节点作为 required launch node：自动运行
+到 duration 后退出时，roslaunch 会一并停止 Gazebo/MoveIt，并让记录器保存 CSV/PNG。
+
+新版汇总图由 sim_09_tuning_analyze.py 生成：不再把无关工况排列成单列柱状图，而是
+按 H(行) x V(列) 显示力 RMS、平衡误差 RMS、XY RMS、关节误差峰值和 PASS/CHECK。
+灰色格子表示尚未运行，避免把缺失工况误读成零误差。
+
+新基线矩阵进度
+----------------
+固定 M/D/Fd=1.5/65/6，command_horizon=0.10 s。下面只列当前控制器的新数据，
+不能与本文件前半段的旧三角换向数据混合成同一结论。
+
+case  H(mm)  V(mm/s)  力RMS(N)  eq_RMS(mm)  xy_RMS(mm)  joint峰值(rad)  总体
+1       8       4       0.186      0.193        2.256        0.00530       通过
+
+- 原始数据：study/data/sim09_runs/robustness_20260713_current/h08_v04/sim09_20260713_142132_pid10623/state.csv
+- 2729 个 running 样本，30.0 Hz；力峰值误差=0.457 N、XY 峰值=5.7 mm、
+  min_singular=0.0351、Z 速度饱和率=0%、无虚拟接触丢失。
+- 与旧 H=8 mm、V=4 mm/s 基线相比，核心法向指标仍处于同一量级；说明新 0.10 s
+  horizon 没有破坏低速低起伏工况。剩余工况待按相同方法补齐。

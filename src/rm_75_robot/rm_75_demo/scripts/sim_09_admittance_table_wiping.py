@@ -1279,7 +1279,7 @@ def main():
             "surface_source={} surface_blend={:.3f} surface_step={:.4f} surface_z={:.4f} eq_tcp_z={:.4f} tcp_eq_err={:.4f} "
             "bump_center={} penetration={:.4f} "
             "fz_virtual_N={:.3f} desired_fz_N={:.3f} force_error_N={:.3f} "
-            "control_rate_hz={:.2f} normal_mass={:.3f} normal_damping={:.3f} "
+            "control_rate_hz={:.2f} command_horizon={:.3f} lead_time={:.3f} stamp_mode={} normal_mass={:.3f} normal_damping={:.3f} "
             "surface_stiffness={:.3f} surface_damping={:.3f} max_z_velocity={:.4f} max_xy_velocity={:.4f} "
             "line_length={:.4f} line_speed={:.4f} line_turn_time={:.3f} wave_height={:.4f} wave_cycles={:.3f} surface_blend_time={:.3f} "
             "vz_raw={:.4f} vz_admittance={:.4f} tcp_limit={} cartesian_velocity={} "
@@ -1308,6 +1308,9 @@ def main():
             args.desired_normal_force,
             force_error,
             args.rate,
+            args.command_horizon,
+            args.lead_time,
+            args.stamp_mode,
             args.normal_mass,
             args.normal_damping,
             args.surface_stiffness,

@@ -9,6 +9,7 @@ import csv
 import math
 import os
 import sys
+from copy import copy
 from collections import defaultdict
 
 
@@ -24,10 +25,13 @@ OPTIONAL_FLOATS = [
     "x_error",
     "y_error",
     "max_xy_velocity",
+    "command_horizon",
+    "lead_time",
 ]
 
 SUMMARY_FIELDS = [
     "run_id", "M_kg", "D_Ns_m", "Fd_N", "wave_height_m", "line_speed_m_s", "max_xy_velocity_m_s",
+    "command_horizon_s", "lead_time_s",
     "samples", "duration_s", "sample_hz",
     "missing_values", "duplicate_times", "time_reversals", "parameter_changes", "quality",
     "force_mean_N", "force_bias_N", "force_rms_N", "force_peak_steady_N",
@@ -167,6 +171,8 @@ def summarize_run(run_id, rows, steady_after):
         "wave_height_m": wave_height,
         "line_speed_m_s": line_speed,
         "max_xy_velocity_m_s": mean(xy_velocity_limits),
+        "command_horizon_s": mean([item["command_horizon"] for item in valid if item["command_horizon"] is not None]),
+        "lead_time_s": mean([item["lead_time"] for item in valid if item["lead_time"] is not None]),
         "samples": len(rows),
         "duration_s": duration,
         "sample_hz": sample_hz,
@@ -393,6 +399,119 @@ def write_mdf_sweep_plot(summaries, output_path):
     return output_path
 
 
+def write_robustness_heatmap(summaries, output_path):
+    """Plot H/V conditions as a matrix instead of unrelated per-case bars."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import ListedColormap
+    except (ImportError, ValueError) as exc:
+        raise ValueError("matplotlib is required for robustness plot: {}".format(exc))
+
+    heights = sorted(set(item["wave_height_m"] for item in summaries))
+    speeds = sorted(set(item["line_speed_m_s"] for item in summaries))
+    by_condition = defaultdict(list)
+    for item in summaries:
+        by_condition[(item["wave_height_m"], item["line_speed_m_s"])].append(item)
+
+    metrics = [
+        ("Force error RMS", "force_rms_N", "N", "<=0.60"),
+        ("TCP equilibrium RMS", "eq_rms_mm", "mm", "<=1.00"),
+        ("XY tracking RMS", "xy_rms_mm", "mm", "<=5.00"),
+        ("Joint tracking peak", "joint_error_max_rad", "rad", "<=0.010"),
+    ]
+    figure, axes = plt.subplots(2, 3, figsize=(15.0, 8.8))
+    axes = list(axes.flat)
+    cmap_names = ["YlOrRd", "PuBuGn", "GnBu", "OrRd"]
+
+    for axis, (title, key, unit, target), cmap_name in zip(axes[:4], metrics, cmap_names):
+        values = []
+        for height in heights:
+            row = []
+            for speed in speeds:
+                items = by_condition.get((height, speed), [])
+                row.append(mean([item[key] for item in items]) if items else float("nan"))
+            values.append(row)
+        # Ubuntu 20.04 bundled Matplotlib can lack Colormap.copy().
+        cmap = copy(plt.get_cmap(cmap_name))
+        cmap.set_bad(color="#e8e8e8")
+        image = axis.imshow(values, origin="lower", aspect="auto", cmap=cmap)
+        axis.set_title("{} ({}, {})".format(title, unit, target), fontsize=10)
+        axis.set_xticks(range(len(speeds)))
+        axis.set_xticklabels([fmt(1000.0 * speed, 0) for speed in speeds])
+        axis.set_yticks(range(len(heights)))
+        axis.set_yticklabels([fmt(1000.0 * height, 0) for height in heights])
+        axis.set_xlabel("wiping speed V (mm/s)")
+        axis.set_ylabel("surface height H (mm)")
+        for row_index, height in enumerate(heights):
+            for column_index, speed in enumerate(speeds):
+                samples = by_condition.get((height, speed), [])
+                value = values[row_index][column_index]
+                axis.text(
+                    column_index, row_index,
+                    "{}\nn={}".format(fmt(value, 3) if samples else "--", len(samples)),
+                    ha="center", va="center", fontsize=8,
+                    color="white" if image.norm(value) > 0.57 else "black",
+                )
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+
+    acceptance_axis = axes[4]
+    acceptance_values = []
+    for height in heights:
+        row = []
+        for speed in speeds:
+            items = by_condition.get((height, speed), [])
+            row.append(1 if items and all(item["acceptance"] == "PASS" for item in items) else (0 if items else -1))
+        acceptance_values.append(row)
+    acceptance_image = acceptance_axis.imshow(
+        acceptance_values, origin="lower", aspect="auto", vmin=-1.0, vmax=1.0,
+        cmap=ListedColormap(["#e8e8e8", "#c94f45", "#2a9d8f"]),
+    )
+    acceptance_axis.set_title("Overall acceptance", fontsize=10)
+    acceptance_axis.set_xticks(range(len(speeds)))
+    acceptance_axis.set_xticklabels([fmt(1000.0 * speed, 0) for speed in speeds])
+    acceptance_axis.set_yticks(range(len(heights)))
+    acceptance_axis.set_yticklabels([fmt(1000.0 * height, 0) for height in heights])
+    acceptance_axis.set_xlabel("wiping speed V (mm/s)")
+    acceptance_axis.set_ylabel("surface height H (mm)")
+    for row_index, height in enumerate(heights):
+        for column_index, speed in enumerate(speeds):
+            items = by_condition.get((height, speed), [])
+            label = "PASS" if acceptance_values[row_index][column_index] == 1 else ("CHECK" if items else "--")
+            acceptance_axis.text(column_index, row_index, "{}\nn={}".format(label, len(items)),
+                                 ha="center", va="center", fontsize=8,
+                                 color="white" if items else "black")
+
+    note_axis = axes[5]
+    note_axis.axis("off")
+    first = summaries[0]
+    note_axis.text(
+        0.02, 0.94,
+        "Fixed controller settings\n\n"
+        "M = {} kg\nD = {} N s/m\nFd = {} N\n\n"
+        "max XY velocity = {} m/s\n"
+        "trajectory horizon = {} s\n"
+        "lead time = {} s\n\n"
+        "Each cell is the mean of matching runs.\n"
+        "n is the number of repetitions.".format(
+            fmt(first["M_kg"], 2), fmt(first["D_Ns_m"], 0), fmt(first["Fd_N"], 1),
+            fmt(first["max_xy_velocity_m_s"], 3), fmt(first["command_horizon_s"], 2),
+            fmt(first["lead_time_s"], 2),
+        ),
+        va="top", fontsize=10,
+    )
+    figure.suptitle("RM75 sim_09 robustness: surface height x wiping speed", fontsize=14)
+    figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.95])
+    output_path = os.path.abspath(output_path)
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+    figure.savefig(output_path, dpi=180)
+    plt.close(figure)
+    return output_path
+
+
 def write_comparison_plot(path, summaries, output_path=""):
     if len(summaries) < 2:
         return ""
@@ -410,15 +529,7 @@ def write_comparison_plot(path, summaries, output_path=""):
 
     robustness_plot = len(set((item["wave_height_m"], item["line_speed_m_s"]) for item in summaries)) > 1
     if robustness_plot:
-        labels = [
-            "c{}\nH {} mm\nV {} mm/s".format(
-                item.get("case_id", item["run_id"]),
-                fmt(1000.0 * item["wave_height_m"], 0),
-                fmt(1000.0 * item["line_speed_m_s"], 0),
-            )
-            for item in summaries
-        ]
-        figure_title = "RM75 sim_09 surface-height / wiping-speed robustness"
+        return write_robustness_heatmap(summaries, output_path)
     else:
         labels = [
             "r{}\nM {}\nD {}\nFd {}".format(

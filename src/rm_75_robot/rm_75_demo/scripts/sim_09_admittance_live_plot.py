@@ -49,6 +49,8 @@ SCALAR_KEYS = [
     "desired_fz_N",
     "force_error_N",
     "control_rate_hz",
+    "command_horizon",
+    "lead_time",
     "normal_mass",
     "normal_damping",
     "surface_stiffness",
@@ -90,7 +92,7 @@ VECTOR_COLUMNS = [
 ]
 
 CSV_FIELDS = (
-    ["wall_time", "ros_time", "reset_index", "mode", "run_state", "surface_source", "tcp_limit"]
+    ["wall_time", "ros_time", "reset_index", "mode", "run_state", "surface_source", "tcp_limit", "stamp_mode"]
     + SCALAR_KEYS
     + [column for _key, columns in VECTOR_COLUMNS for column in columns]
     + ["raw_state"]
@@ -218,6 +220,7 @@ def parse_state_text(text, fallback_elapsed):
         "run_state": extract_token(text, "run_state"),
         "surface_source": extract_token(text, "surface_source"),
         "tcp_limit": extract_token(text, "tcp_limit"),
+        "stamp_mode": extract_token(text, "stamp_mode"),
     }
     for key in SCALAR_KEYS:
         sample[key] = extract_float(text, key)
@@ -273,6 +276,7 @@ def sample_to_csv_row(sample, raw_state):
         "run_state": sample.get("run_state", ""),
         "surface_source": sample.get("surface_source", ""),
         "tcp_limit": sample.get("tcp_limit", ""),
+        "stamp_mode": sample.get("stamp_mode", ""),
         "raw_state": raw_state,
     }
     for key in SCALAR_KEYS:

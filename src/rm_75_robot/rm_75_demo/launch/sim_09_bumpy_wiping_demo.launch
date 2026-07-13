@@ -36,6 +36,11 @@
   <arg name="surface_damping" default="12.0"/>
   <arg name="normal_mass" default="1.5"/>
   <arg name="normal_damping" default="65.0"/>
+  <!-- Short rolling JointTrajectory timing. Keep these explicit for tracking experiments. -->
+  <arg name="control_rate" default="30.0"/>
+  <arg name="command_horizon" default="0.10"/>
+  <arg name="lead_time" default="0.03"/>
+  <arg name="stamp_mode" default="future"/>
   <arg name="max_z_velocity" default="0.014"/>
   <!-- Tangential tracker limit; raise only after checking X tracking at the target wiping speed. -->
   <arg name="max_xy_velocity" default="0.018"/>
@@ -71,7 +76,8 @@
     type="sim_09_admittance_table_wiping.py"
     name="sim_09_admittance_table_wiping"
     output="screen"
-    args="$(arg prepare_arg) $(arg start_mode_arg) --mode $(arg mode) --duration $(arg duration) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --line-turn-time $(arg line_turn_time) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --max-xy-velocity $(arg max_xy_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime) --tuning-command-topic $(arg tuning_topic)" />
+    required="true"
+    args="$(arg prepare_arg) $(arg start_mode_arg) --mode $(arg mode) --duration $(arg duration) --rate $(arg control_rate) --command-horizon $(arg command_horizon) --lead-time $(arg lead_time) --stamp-mode $(arg stamp_mode) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --line-turn-time $(arg line_turn_time) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --max-xy-velocity $(arg max_xy_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime) --tuning-command-topic $(arg tuning_topic)" />
 
   <node
     if="$(arg plot)"
