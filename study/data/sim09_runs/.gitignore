@@ -1,2 +1,4 @@
-*
-!.gitignore
+# sim_09 的 CSV/PNG 是实验可复核的原始记录，应纳入版本控制。
+# 仅忽略 Python 运行时可能留下的缓存文件。
+__pycache__/
+*.pyc
