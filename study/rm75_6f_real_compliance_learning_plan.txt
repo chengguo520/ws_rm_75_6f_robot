@@ -1,0 +1,156 @@
+RM75-6F 实物柔顺控制学习计划
+============================
+
+学习目标
+--------
+- 把实物 RM75-6F 的柔顺控制能力分阶段吃透。
+- 明确 Gazebo 导纳实验、实物六维力读取、拖动示教、力位混合控制之间的关系。
+- 最终目标是安全完成“低速接触 + 恒力擦桌子”一类实物柔顺作业。
+
+当前已经完成
+------------
+1. 独立实物分支
+   - 当前分支：feature/real-force-compliance
+   - 实物控制代码独立放在：
+     src/rm_75_robot/rm_75_real_force_control
+   - 不改 Gazebo 仿真实验包。
+
+2. 六维力只读链路
+   - 已连接实物控制器 192.168.1.18:8080。
+   - 已通过 Get_Force_Data 读取 Fx/Fy/Fz/Mx/My/Mz。
+   - 已发布 ROS topic：
+     /rm75_force_sensor/wrench
+
+3. 普通拖动示教
+   - Start_Drag_Teach 已验证成功。
+   - Stop_Drag_Teach 已验证成功。
+   - 说明官方基础拖拽柔顺能力可用。
+
+4. 复合六维力拖动示教
+   - Start_Multi_Drag_Teach(mode=1) 当前返回 1。
+   - 1 对应 CONTROLLER_DATE_RETURN_FALSE，即控制器返回 false。
+   - 说明 SDK 和网络没问题，问题在控制器条件/配置/模式/标定/固件限制。
+
+总体学习路线
+------------
+阶段 1：六维力传感器基础
+- 学会启动只读六维力节点。
+- 学会 Clear_Force_Data 清零。
+- 记录静止零漂和噪声范围。
+- 手推末端，确认 Fx/Fy/Fz 的正负方向。
+- 区分基坐标系、工具坐标系、力传感器坐标系、夹爪 TCP。
+
+阶段 2：拖动示教
+- 使用普通 Start_Drag_Teach 体验人手拖拽。
+- 记录拖拽手感、阻尼感、是否容易触发报警。
+- 学会 Stop_Drag_Teach，养成进入/退出成对调用的习惯。
+- 后续排查复合拖动 Start_Multi_Drag_Teach(mode=1) 失败原因。
+
+阶段 3：普通力位混合控制
+- 学习 Set_Force_Postion。
+- 第一轮只做工具坐标系 Z 方向 2N。
+- 先软接触，不直接压硬桌面。
+- 确认 Stop_Force_Postion 能可靠退出。
+
+阶段 4：低速接触实验
+- 机械臂移动到桌面上方安全高度。
+- 清零六维力。
+- 开启 z 方向小力力位混合。
+- 用非常低速度做 1cm~2cm 的 x/y 直线移动。
+- 观察实际接触力是否稳定。
+
+阶段 5：擦桌子任务
+- x/y 方向按位置轨迹走。
+- z 方向用厂家力位混合维持接触力。
+- 目标力从 2N 开始，再尝试 3N~5N。
+- 每次实验结束必须先退出力控，再撤离桌面。
+
+阶段 6：透传力位混合补偿
+- 学习 Start_Force_Position_Move。
+- 学习 Force_Position_Move_POSE / Force_Position_Move_Joint。
+- 用户周期性下发轨迹，厂家底层做 z 方向力补偿。
+- 这是后续更像“自主柔顺作业”的路线。
+
+阶段 7：拖动轨迹复现
+- 学习 Run_Drag_Trajectory。
+- 学习 Pause_Drag_Trajectory / Continue_Drag_Trajectory / Stop_Drag_Trajectory。
+- 学习 Drag_Trajectory_Origin。
+- 目标是“人拖一遍路径，机械臂复现一遍路径”。
+
+推荐下一步实验
+--------------
+下一步建议做：普通力位混合 2N 小力测试。
+
+原因：
+- 六维力读取已经通。
+- 普通拖动示教已经通。
+- 现在要从“人拖动机械臂”进入“机械臂接触环境时主动柔顺补偿”。
+- Set_Force_Postion 是官方实物接触柔顺的核心入口。
+
+下一步实验的安全流程：
+1. 确认急停可用。
+2. 确认末端工具/夹爪不接触外物。
+3. 启动只读六维力节点。
+4. Clear_Force_Data 清零。
+5. 手推确认 Z 方向正负号。
+6. 移动到软接触测试位置。
+7. Set_Force_Postion(sock, 1, 1, 2, 20, RM_BLOCK)。
+8. 只保持很短时间或做很小位移。
+9. Stop_Force_Postion(sock, RM_BLOCK)。
+10. 记录力数据和实际机械臂表现。
+
+必须记住的安全原则
+------------------
+- 先读力，再清零，再开控制。
+- 先 2N，不要一开始用大力。
+- 先软接触，不要一开始压硬桌面。
+- 每个进入控制模式的接口，都必须有退出接口。
+- 不要同时混用拖动示教、MoveJ/MoveL、普通力位混合、透传力位混合。
+- 不确定控制器状态时，先停止当前模式，再重新开始。
+
+常用命令
+--------
+编译实物控制包：
+
+cd /home/ros/ws_rm_75_6f_robot
+catkin build rm_75_real_force_control
+source devel/setup.bash
+
+读取六维力：
+
+roslaunch rm_75_real_force_control force_read_only.launch
+
+另开终端观察：
+
+rostopic echo /rm75_force_sensor/wrench
+
+清零六维力：
+
+rosservice call /rm75_force_sensor/zero
+
+启动普通拖动示教：
+
+roslaunch rm_75_real_force_control drag_teach.launch use_multi_drag:=false
+
+另开终端：
+
+rosservice call /rm75_drag_teach/start
+rosservice call /rm75_drag_teach/stop
+
+限时拖动示教测试：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+学习笔记索引
+------------
+- rm75_6f_real_robot_compliance_operation_guide.txt
+  官方实物柔顺/力位混合 API 总览。
+
+- rm75_6f_real_force_read_only_debug.txt
+  六维力只读节点和实物调试记录。
+
+- rm75_6f_real_drag_teach_debug.txt
+  拖动示教节点和实物调试记录。
+
+- rm75_6f_real_force_control_code_walkthrough.txt
+  当前实物控制代码讲解。

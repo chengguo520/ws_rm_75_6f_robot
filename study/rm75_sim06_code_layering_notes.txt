@@ -1,0 +1,205 @@
+RM75-6F sim_06 代码分层阅读说明
+================================
+
+来源文件
+--------
+- 原始代码：sim_06_admittance_streaming_joint_proxy.py
+- 原始实验说明：rm75_6f_admittance_streaming_command_experiment.txt
+- 本次新增注释版：sim_06_admittance_streaming_joint_proxy_layered_annotated.py
+
+总体功能
+--------
+这个脚本实现的是 RM75-6F 在 Gazebo 中的“连续发布 /command 的导纳演示”：
+
+虚拟外力 F
+  -> 导纳模型 M/D/K
+  -> 生成笛卡尔 offset
+  -> joint-proxy 映射成 target_joints
+  -> 发布 /arm/arm_joint_controller/command
+  -> Gazebo 机械臂运动
+  -> 撤力后 offset 回零，机械臂回到预备姿态附近
+
+代码分层
+--------
+
+Layer 0：全局配置层
+------------------
+位置：
+- 文件开头的 GROUP_NAME、EEF_LINK、REFERENCE_FRAME、JOINT_NAMES、topic 常量。
+
+作用：
+- 确定 MoveIt 规划组、末端 link、参考坐标系、控制器 topic、状态 topic。
+- 这些名字必须和 RM75-6F MoveIt 配置、ros_control 配置、Gazebo 发布的话题一致。
+
+关键变量：
+- GROUP_NAME = "arm"
+- EEF_LINK = "link7"
+- REFERENCE_FRAME = "base_link"
+- COMMAND_TOPIC = "/arm/arm_joint_controller/command"
+- JOINT_STATES_TOPIC = "/joint_states"
+
+Layer 1：通用工具层
+------------------
+函数：
+- clamp
+- fmt
+- fmt3
+- normalize_plan_result
+- error_name
+- copy_pose_stamped
+
+作用：
+- 处理数值限幅、日志格式、MoveIt 返回值兼容、PoseStamped 拷贝。
+- 这些函数不直接控制机械臂，只是为后面的控制流程服务。
+
+Layer 2：外部力输入层
+--------------------
+类：
+- WrenchInput
+
+作用：
+- 可选订阅 /rm75_admittance_stream/target_wrench。
+- 使用 geometry_msgs/WrenchStamped 输入外部虚拟力。
+- 默认脚本不依赖这个 topic，而是使用内置 Fx=8N 的 demo force。
+
+注意：
+- 当前只使用 force.x/y/z。
+- torque.x/y/z 暂不使用。
+- 不做 TF 坐标变换，默认 wrench 在 base_link 下表达。
+
+Layer 3：导纳控制模型层
+----------------------
+类：
+- TranslationalAdmittance
+
+核心公式：
+M * x_ddot + D * x_dot + K * x = F_ext
+
+离散更新：
+a = (F - D*v - K*x) / M
+v = v + a*dt
+x = x + v*dt
+
+作用：
+- 把外力转换成 offset。
+- 这个 offset 是虚拟笛卡尔位移，不是关节角，也不是真实末端反馈。
+
+关键参数：
+- mass
+- damping
+- stiffness
+- max_offset
+- max_velocity
+
+Layer 3.5：导纳输出可视化辅助层
+------------------------------
+函数：
+- make_target_pose
+- demo_force
+
+作用：
+- make_target_pose：把 equilibrium_pose + offset 变成理论目标末端位姿，发布给用户观察。
+- demo_force：默认生成前 6 秒 Fx=8N、之后为 0 的虚拟力。
+
+Layer 4：机器人准备与状态检查层
+------------------------------
+函数：
+- move_to_prepare_joints
+- wait_for_command_connection
+- wait_for_joint_state
+类：
+- JointStateCache
+
+作用：
+- 确保仿真和控制器已经启动。
+- 用 MoveIt 先到一个小弯曲预备姿态。
+- 预备姿态只是实验起点，不是柔顺控制循环的一部分。
+- 持续缓存 /joint_states，用于观察 target_joints 和 measured_joints 的跟随误差。
+
+检查逻辑：
+- /joint_states 是否包含 7 个关节；
+- /arm/arm_joint_controller/command 是否有订阅者；
+- MoveIt 是否能完成预备姿态规划与执行。
+
+Layer 5：控制输出层
+------------------
+函数：
+- map_offset_to_joint_target
+- smooth_joint_target
+- limit_joint_step
+- publish_joint_command
+
+作用：
+- map_offset_to_joint_target：把导纳 offset 映射成一组 target_joints。
+- smooth_joint_target：对 raw_target_joints 做一阶低通滤波。
+- limit_joint_step：限制每个控制周期 target_joints 的最大变化量。
+- publish_joint_command：发布 trajectory_msgs/JointTrajectory 到 /arm/arm_joint_controller/command。
+
+重要限制：
+- map_offset_to_joint_target 是 joint-proxy，不是真正 IK/Jacobian。
+- 这个映射只是为了让 Gazebo 中的机械臂运动可见。
+- 真正末端柔顺后续应替换成 IK 或 Jacobian 映射。
+
+新增命令整形逻辑：
+raw_target_joints
+  -> smooth_joint_target
+  -> limit_joint_step
+  -> target_joints
+  -> /arm/arm_joint_controller/command
+
+参数含义：
+- --joint-smoothing-alpha：低通滤波系数，越小越顺但越慢，默认 0.45。
+- --max-joint-step：每周期最大关节目标变化量，单位 rad/control-cycle，默认 0.02。
+- --settle-duration：主实验结束后，继续零外力回零的时间，默认 2.0s。
+
+Layer 6：参数与主流程层
+----------------------
+函数：
+- parse_args
+- main
+
+main 流程：
+1. 解析命令行参数。
+2. 检查 ROS master。
+3. 初始化 MoveIt 和 rospy。
+4. 等待 /joint_states。
+5. 创建 /command publisher。
+6. 等待 JointTrajectoryController 订阅 /command。
+7. 创建 MoveGroupCommander。
+8. 移动到预备姿态。
+9. 记录 equilibrium_pose 和 equilibrium_joints。
+10. 创建 WrenchInput、TranslationalAdmittance、观察 topic。
+11. 进入控制循环：
+    - 获取力；
+    - 导纳 step；
+    - 生成 target_pose；
+    - joint-proxy 生成 target_joints；
+    - 低通滤波与每周期关节步长限幅；
+    - 发布 /command；
+    - 读取 /joint_states 并计算 joint_error_max；
+    - 发布 state；
+    - 打印日志。
+12. 结束时继续用零外力积分，帮助 offset 和关节命令回到平衡点。
+13. 关闭 MoveIt。
+
+推荐阅读顺序
+------------
+1. 先看文件顶部的“整体分层”注释。
+2. 看 Layer 0，确认 topic 和关节名。
+3. 看 TranslationalAdmittance.step，理解导纳公式。
+4. 看 map_offset_to_joint_target，理解为什么目前只是 joint-proxy。
+5. 看 publish_joint_command，理解 /command 连续发布。
+6. 最后看 main，把完整流程串起来。
+
+下一步代码升级建议
+------------------
+1. 保留 TranslationalAdmittance 不变。
+2. 优先替换 map_offset_to_joint_target：
+   - 第一阶段：MoveIt IK 目标位姿；
+   - 第二阶段：Jacobian 伪逆速度映射；
+   - 第三阶段：真正的 Cartesian servo / velocity controller。
+3. 后续加入 Gazebo force-torque sensor 后，把 WrenchInput 接到仿真力反馈。
+4. 擦桌子实验时：
+   - x/y 给定轨迹；
+   - z 做导纳或恒力；
+   - 姿态保持工具面朝桌面。

@@ -1,0 +1,337 @@
+RM75-6F 实物柔顺与厂家力位混合 API 备忘
+========================================
+
+记录目的
+--------
+- 这份笔记记录厂家 C++ API 中和 RM75-6F 实物柔顺、六维力、力位混合控制有关的接口。
+- 当前 Gazebo 仿真不能直接调用这些接口；这些接口需要连接真实机械臂控制器。
+- 后续如果要做实物柔顺调控、恒力擦桌子、末端六维力读取，可以按这份流程扩展 ROS driver 或单独写 C++ API 测试程序。
+
+资料来源
+--------
+厂家 ROS 源码：
+/home/ros/机械臂/RM-75系列机械臂/（4）ROS资料/RM75发布版@20221026/rm_75_robot
+
+厂家 C++ API 文档：
+/home/ros/机械臂/睿尔曼机械臂接口函数说明(c++)V4.0.2.pdf
+
+厂家 C++ API 头文件：
+/home/ros/机械臂/（2）API/C++/include/rm_base.h
+/home/ros/机械臂/（2）API/C++/include/rm_service.h
+/home/ros/机械臂/（2）API/C++/include/rm_define.h
+
+核心判断
+--------
+1. RM75-6F 实物含义：
+   - 6F 表示末端带六维力/力矩传感器版本。
+   - 实物控制器/API 可以读取 Fx、Fy、Fz、Mx、My、Mz。
+   - 厂家底层 API 提供力位混合控制和透传力位混合补偿接口。
+
+2. Gazebo 仿真限制：
+   - 当前 Gazebo 模型没有厂家真实控制器。
+   - 厂家 API 需要连接真实机械臂 socket，不能直接作用于 Gazebo。
+   - Gazebo 如果要模拟六维力，需要另外在 URDF/SDF 中加 force_torque sensor 插件。
+
+3. 当前 ROS 发布版限制：
+   - /home/ros/ws_rm_75_6f_robot 当前 ROS driver 没有封装以下厂家 API：
+     Get_Force_Data
+     Clear_Force_Data
+     Set_Force_Postion
+     Stop_Force_Postion
+     Start_Force_Position_Move
+     Force_Position_Move_POSE
+     Force_Position_Move_Joint
+     Stop_Force_Postion_Move
+   - 后续实物路线需要自己扩展 ROS topic/service，或者直接写 C++ 程序调用厂家 API。
+
+实物连接基本流程
+----------------
+厂家 C API 路线通常是：
+
+1. 初始化 API
+   RM_API_Init(ARM_75, callback)
+
+   相关定义：
+   ARM_75 = 75
+
+   callback 可用于接收透传接口回调；不需要时可传 NULL。
+
+2. 连接机械臂控制器
+   Arm_Socket_Start(arm_ip, arm_port, recv_timeout)
+
+   常见真实机械臂 IP/端口需要按现场配置确认。
+   本工作区历史记录中实物 IP 使用过：
+   192.168.1.18
+
+3. 检查连接状态
+   Arm_Socket_State(ArmSocket)
+
+4. 使用力传感器或力位混合 API
+
+5. 结束时停止力控/运动并关闭连接
+   Stop_Force_Postion(...)
+   Stop_Force_Postion_Move(...)
+   Arm_Socket_Close(...)
+   RM_API_UnInit()
+
+六维力数据读取流程
+------------------
+接口：
+Get_Force_Data(SOCKHANDLE ArmSocket, float *Force)
+
+返回数组：
+Force[0] = Fx，单位 N
+Force[1] = Fy，单位 N
+Force[2] = Fz，单位 N
+Force[3] = Mx，单位 Nm
+Force[4] = My，单位 Nm
+Force[5] = Mz，单位 Nm
+
+周期限制：
+- 厂家文档说明周期获取六维力数据时，周期不能小于 50ms。
+- 即最高约 20Hz。
+
+清零接口：
+Clear_Force_Data(SOCKHANDLE ArmSocket, bool block)
+
+作用：
+- 将六维力数据清零。
+- 后续读数基于当前偏置。
+
+实物使用建议：
+1. 机械臂静止、末端不接触外界时先 Clear_Force_Data。
+2. 以 10Hz~20Hz 读取 Force。
+3. 先只打印 Fx/Fy/Fz/Mx/My/Mz，不要立刻闭环控制。
+4. 确认坐标系、符号方向、零漂和噪声。
+5. 再接入导纳控制或力位混合控制。
+
+一维力 Fz 数据读取流程
+----------------------
+接口：
+Get_Fz(SOCKHANDLE ArmSocket, float *Fz)
+
+用途：
+- 读取末端一维力传感器数据，主要是 Z 方向力。
+
+厂家说明：
+- 量程约 200N。
+- 准度 0.5%FS。
+- 周期查询频率不能高于 40Hz。
+- 第一帧数据有滞后，建议从第二帧开始使用。
+
+清零接口：
+Clear_Fz(SOCKHANDLE ArmSocket, bool block)
+
+适用场景：
+- 如果只做 z 方向恒力擦桌子，一维力接口比六维力更简单。
+- RM75-6F 是六维力版本，优先考虑六维力接口；如果项目只关心法向力，也可以抽取 Fz 使用。
+
+普通力位混合控制流程
+--------------------
+接口：
+Set_Force_Postion(SOCKHANDLE ArmSocket, int sensor, int mode, int direction, int N, int block)
+
+注意：
+- 厂家函数名里 Position 拼写为 Postion，代码中必须按头文件拼写。
+
+参数：
+sensor:
+  0 = 一维力
+  1 = 六维力
+
+mode:
+  0 = 基坐标系力控
+  1 = 工具坐标系力控
+
+direction:
+  0 = 沿 X 轴
+  1 = 沿 Y 轴
+  2 = 沿 Z 轴
+  3 = 沿 RX 姿态方向
+  4 = 沿 RY 姿态方向
+  5 = 沿 RZ 姿态方向
+
+N:
+  力大小，单位 0.1N
+  例如目标力 5N，应传 N = 50。
+
+停止接口：
+Stop_Force_Postion(SOCKHANDLE ArmSocket, bool block)
+
+适合的实物实验：
+1. 沿工具 Z 方向恒力贴合。
+2. 沿基坐标系 Z 方向保持下压力。
+3. 低速接触桌面或平面。
+
+擦桌子直觉流程：
+1. 先移动到桌面上方安全高度。
+2. 清零六维力数据。
+3. 设置力位混合：
+   sensor = 1       # 六维力
+   mode = 1         # 工具坐标系
+   direction = 2    # Z 方向
+   N = 20~50        # 2N~5N，单位 0.1N
+4. 以很低速度做 x/y 平面擦拭轨迹。
+5. 结束后立即 Stop_Force_Postion。
+
+透传力位混合补偿流程
+--------------------
+这是后续更高级的实物接口，适合“自定义轨迹 + 底层力补偿”。
+
+开启：
+Start_Force_Position_Move(SOCKHANDLE ArmSocket, bool block)
+
+关节角透传补偿：
+Force_Position_Move_Joint(
+    SOCKHANDLE ArmSocket,
+    const float *joint,
+    byte sensor,
+    byte mode,
+    int dir,
+    float force
+)
+
+位姿透传补偿：
+Force_Position_Move_POSE(
+    SOCKHANDLE ArmSocket,
+    POSE pose,
+    byte sensor,
+    byte mode,
+    int dir,
+    float force
+)
+
+停止：
+Stop_Force_Postion_Move(SOCKHANDLE ArmSocket, bool block)
+
+参数：
+sensor:
+  0 = 一维力
+  1 = 六维力
+
+mode:
+  0 = 沿基坐标系
+  1 = 沿工具端坐标系
+
+dir:
+  0 = X
+  1 = Y
+  2 = Z
+  3 = Rx
+  4 = Ry
+  5 = Rz
+  一维力类型时默认方向为 Z。
+
+force:
+  力大小，单位 N。
+  注意这里和 Set_Force_Postion 的 N 参数不同。
+  Set_Force_Postion 的 N 是 0.1N。
+  Force_Position_Move_* 的 force 是 N。
+
+适合的实物擦桌子架构：
+自定义 x/y 擦拭轨迹
+  -> 周期性发送 pose 或 joint 透传目标
+  -> 底层力位混合补偿维持 z 方向接触力
+  -> 结束后关闭透传力位混合补偿
+
+和我们当前 Gazebo 导纳实验的关系
+--------------------------------
+当前仿真路线：
+虚拟 wrench
+  -> 自己写导纳模型 M/D/K
+  -> MoveIt 目标位姿
+  -> Gazebo JointTrajectoryController
+
+实物厂家力位混合路线：
+真实六维力传感器
+  -> 厂家底层力控/力位混合模块
+  -> Set_Force_Postion 或 Force_Position_Move_*
+  -> 真实机械臂控制器执行
+
+两者的共同点：
+- 都是在做“某些方向位置控制，某些方向力控制/柔顺补偿”。
+- 都需要小力、小速度、小范围开始。
+
+两者的区别：
+- Gazebo 路线是我们自己模拟外力和导纳。
+- 实物路线可以直接使用末端六维力数据和厂家底层力位混合。
+- Gazebo 中不能直接调用厂家 socket API。
+
+建议的实物学习顺序
+------------------
+阶段 1：只读六维力
+- 写一个最小 C++ 或 ROS 节点。
+- 调用 RM_API_Init、Arm_Socket_Start、Get_Force_Data。
+- 发布 ROS topic，例如 /rm75_force_sensor/wrench。
+- 只观察 Fx/Fy/Fz/Mx/My/Mz，不控制机械臂。
+
+阶段 2：六维力清零和方向确认
+- 空载静止时 Clear_Force_Data。
+- 手轻推末端，确认力方向和坐标系。
+- 记录工具坐标系和基坐标系下各方向符号。
+
+阶段 3：厂家普通力位混合
+- 先用 Set_Force_Postion 做单方向小力控制。
+- 建议先从 Z 方向 2N~5N 开始。
+- 随时准备 Stop_Force_Postion 和急停。
+
+阶段 4：擦桌子
+- x/y 方向用低速轨迹。
+- z 方向用厂家力位混合维持目标接触力。
+- 每次实验结束必须 Stop_Force_Postion。
+
+阶段 5：透传力位混合补偿
+- Start_Force_Position_Move。
+- 周期性发送 Force_Position_Move_POSE 或 Force_Position_Move_Joint。
+- 用厂家底层补偿保持接触力。
+- Stop_Force_Postion_Move。
+
+安全 checklist
+--------------
+1. 实物第一次不要直接接触桌面，先空中读力。
+2. 清零力传感器时，末端必须静止且不接触外界。
+3. 目标力从 2N 开始，不要一上来用大力。
+4. 速度比例先用 5%~10%。
+5. 力控方向必须确认：基坐标系/工具坐标系、正负方向、Z 轴朝向。
+6. 必须准备急停。
+7. 每次力控实验结束都调用停止接口。
+8. 不要同时混用普通运动接口和透传接口，厂家文档提示透传模式下不要使用其他运动接口。
+9. 真实机械臂实验前，先保存安全回零/撤离位姿。
+
+后续可实现的 ROS 封装
+---------------------
+建议新增一个实物力控封装节点，例如：
+rm75_force_api_node
+
+可能的 ROS topic/service：
+
+发布：
+/rm75_force_sensor/wrench
+  类型：geometry_msgs/WrenchStamped
+  来源：Get_Force_Data
+
+服务：
+/rm75_force_sensor/zero
+  调用 Clear_Force_Data
+
+/rm75_force_control/start_hybrid
+  调用 Set_Force_Postion
+
+/rm75_force_control/stop_hybrid
+  调用 Stop_Force_Postion
+
+/rm75_force_position_move/start
+  调用 Start_Force_Position_Move
+
+/rm75_force_position_move/stop
+  调用 Stop_Force_Postion_Move
+
+订阅：
+/rm75_force_position_move/target_pose
+  类型：geometry_msgs/PoseStamped 或自定义消息
+  调用 Force_Position_Move_POSE
+
+需要特别注意：
+- 当前 rm_75_driver.cpp 走的是厂家 JSON/socket 旧封装。
+- 厂家 C++ API 头文件和库在 /home/ros/机械臂/（2）API/C++ 或 rm_lib_4_0_5 中。
+- 如果直接扩展现有 rm_75_driver，需要处理链接库、头文件路径、消息/服务定义和线程周期。

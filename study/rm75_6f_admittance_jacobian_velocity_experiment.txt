@@ -1,0 +1,291 @@
+RM75-6F sim_08：Jacobian 伪逆速度导纳实验
+========================================
+
+实验目标
+--------
+- 在 Gazebo 中验证“导纳速度 -> Jacobian 伪逆 -> 关节速度 -> 关节位置命令”的流程。
+- 相比 sim_07，sim_08 不再每周期求 IK 位置解，而是用当前关节角下的 Jacobian 计算 q_dot。
+- 这个实验更接近真正的连续柔顺控制主线。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- 仿真环境：ROS1 Noetic + Gazebo + MoveIt + ros_control
+- 脚本：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_08_admittance_jacobian_velocity.py
+- 关键依赖：
+  moveit_commander.MoveGroupCommander.get_jacobian_matrix
+  numpy
+  trajectory_msgs/JointTrajectory
+
+ROS 框架关系
+------------
+主要节点：
+
+1. /gazebo
+   - 负责机械臂仿真。
+
+2. /move_group
+   - sim_08 使用 MoveGroupCommander.get_jacobian_matrix 获取当前姿态下的 Jacobian。
+   - 注意：连续控制阶段不做 MoveIt 规划。
+
+3. /arm/arm_joint_controller
+   - Gazebo 的 position JointTrajectoryController。
+   - 接收 /arm/arm_joint_controller/command。
+
+4. sim_08_admittance_jacobian_velocity.py
+   - 计算导纳模型。
+   - 用 Jacobian 阻尼伪逆把笛卡尔速度变成 q_dot。
+   - 从上一帧已发布命令继续积分得到 target_joints。
+   - 发布到 /arm/arm_joint_controller/command。
+
+关键 topic：
+
+1. /rm75_admittance_jacobian/target_wrench
+   - 类型：geometry_msgs/WrenchStamped
+   - 可选外部虚拟力输入。
+
+2. /rm75_admittance_jacobian/target_pose
+   - 类型：geometry_msgs/PoseStamped
+   - 导纳 offset 对应的理论目标末端位姿。
+
+3. /rm75_admittance_jacobian/state
+   - 类型：std_msgs/String
+   - 包含 force_N、offset_m、velocity_mps、acceleration、qdot、min_singular、target_joints、joint_error_max。
+
+4. /arm/arm_joint_controller/command
+   - 类型：trajectory_msgs/JointTrajectory
+   - 最终发布的短 horizon 关节位置命令。
+
+5. /arm/joint_states
+   - 类型：sensor_msgs/JointState
+   - sim_08 当前默认反馈源。
+   - sim_10 最小验证已经确认：/command 发小幅 joint4 正弦命令时，/arm/joint_states 会真实变化。
+   - 因此后续 Jacobian 控制优先使用 /arm/joint_states，而不是默认假设 /joint_states 一定是真实控制反馈。
+
+数据流/控制流程
+---------------
+默认流程：
+
+虚拟外力 Fx=5N
+  -> 导纳模型 M/D/K
+  -> offset_m 和 velocity_mps
+  -> 取 velocity_mps 作为末端期望线速度
+  -> 构造 6D 速度 [vx, vy, vz, 0, 0, 0]
+  -> MoveIt Jacobian J(q)
+  -> DLS 阻尼伪逆计算 q_dot
+  -> q_des = q_last_commanded + q_dot * dt
+  -> 每周期关节步长限幅
+  -> /arm/arm_joint_controller/command
+
+和 sim_07 的区别：
+
+sim_07：
+offset
+  -> target_pose
+  -> /compute_ik
+  -> target_joints
+
+sim_08：
+velocity
+  -> Jacobian pseudo-inverse
+  -> q_dot
+  -> q_des
+
+关键公式或控制逻辑
+------------------
+导纳公式：
+
+M * x_ddot + D * x_dot + K * x = F_ext
+
+Jacobian 速度关系：
+
+v = J(q) * q_dot
+
+阻尼最小二乘伪逆：
+
+q_dot = J^T * (J * J^T + lambda^2 * I)^-1 * v
+
+为什么使用阻尼伪逆：
+- 普通伪逆在奇异点附近会让 q_dot 非常大。
+- 阻尼 lambda 可以降低奇异附近的速度爆炸风险。
+- lambda 越大越稳，但末端响应越慢。
+
+当前 6D 速度设定：
+
+v6 = [vx, vy, vz, 0, 0, 0]
+
+解释：
+- 导纳只输出平移速度。
+- 姿态角速度设为 0，是希望工具姿态不要明显漂移。
+- 但由于当前仍通过位置轨迹控制器执行，不是严格的速度控制器，所以姿态保持只是近似。
+
+命令积分的关键修正：
+
+Jacobian 计算点：
+q_current = /arm/joint_states 当前真实反馈
+
+命令积分点：
+q_des = q_last_commanded + q_dot * dt
+
+这里不能写成：
+q_des = q_current + q_dot * dt
+
+原因：
+- q_current 用来描述机器人当前姿态，所以适合算 Jacobian。
+- q_last_commanded 是外层速度命令已经发布到哪里，所以适合做连续积分。
+- 如果每周期都从 q_current 重新加一小步，控制器稍微滞后时，目标会被不断拉回反馈附近，速度命令就积不起来。
+- 这正是 sim_09 失败总结里提到过的关键点。
+
+trajectory 时间戳：
+- sim_08 默认使用 future stamp。
+- 也就是 header.stamp = rospy.Time.now() + lead_time。
+- 默认 lead_time = 0.03 s。
+- 这样可以降低 Gazebo/ros_control 收到命令时认为轨迹点已经过期的概率。
+
+默认参数：
+- rate = 30 Hz
+- command_horizon = 0.12 s
+- stamp_mode = future
+- lead_time = 0.03 s
+- joint_states_topic = /arm/joint_states
+- demo_force_x = 5 N
+- max_offset = [0.06, 0.03, 0.03] m
+- max_velocity = [0.025, 0.015, 0.015] m/s
+- jacobian_damping = 0.05
+- max_joint_velocity = 0.25 rad/s
+- max_joint_step = 0.015 rad/control-cycle
+- settle_duration = 2.0 s
+
+命令行操作
+----------
+终端 1：启动 Gazebo + MoveIt
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+终端 2：运行 sim_08
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py
+
+观察 Jacobian 状态：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo /rm75_admittance_jacobian/state
+
+观察控制器命令：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/arm_joint_controller/command
+
+观察关节反馈：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/joint_states
+
+对比 MoveIt 聚合后的 joint_states：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /joint_states
+
+使用外部 wrench：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --use-topic-wrench
+
+另一个终端发布外力：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic pub -r 30 /rm75_admittance_jacobian/target_wrench geometry_msgs/WrenchStamped "header:
+  frame_id: 'base_link'
+wrench:
+  force:
+    x: 4.0
+    y: 0.0
+    z: 0.0
+  torque:
+    x: 0.0
+    y: 0.0
+    z: 0.0"
+
+调参示例
+--------
+更稳、更慢：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --jacobian-damping 0.10 --max-joint-velocity 0.15 --max-joint-step 0.01
+
+响应更快：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --rate 50 --command-horizon 0.08 --jacobian-damping 0.04 --max-joint-velocity 0.30
+
+偏移更小、更安全：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --demo-force-x 3 --max-offset 0.04 0.02 0.02 --max-velocity 0.015 0.010 0.010
+
+复现实验用的短测命令：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --duration 8 --demo-force-duration 3 --demo-force-x 3 --max-velocity 0.015 0.010 0.010
+
+观察现象
+--------
+成功时应该看到：
+- 脚本先移动到预备姿态。
+- force_N 有值时，velocity_mps 出现响应。
+- qdot 不为 0，target_joints 连续变化。
+- Gazebo 中机械臂连续偏移。
+- 6 秒后 force_N 变为 0，导纳弹簧项让 velocity 反向，机械臂逐渐回位。
+
+重点观察：
+- qdot：关节速度命令，单位 rad/s。
+- min_singular：Jacobian 最小奇异值，用来判断是否接近奇异。
+- target_joints：外层控制器当前发给 JointTrajectoryController 的关节目标。
+- measured_joints：从 /arm/joint_states 读到的真实反馈。
+- joint_error_max：target_joints 和 measured_joints 之间的最大误差。
+
+排错 checklist
+--------------
+1. min_singular 很小，终端提示 near singular
+   - 说明当前姿态接近奇异。
+   - 增大阻尼：
+     --jacobian-damping 0.10
+   - 降低关节速度：
+     --max-joint-velocity 0.15
+   - 减小外力或 offset：
+     --demo-force-x 3 --max-offset 0.04 0.02 0.02
+
+2. joint_error_max 一直很大
+   - 说明控制器跟不上命令。
+   - 增大 command_horizon：
+     --command-horizon 0.16
+   - 降低 max_joint_velocity：
+     --max-joint-velocity 0.15
+   - 限制 max_joint_step：
+     --max-joint-step 0.01
+
+3. 机械臂不动
+   - 检查控制器 command：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/arm_joint_controller/command
+   - 检查 /arm/joint_states：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/joint_states
+   - 先跑 sim_10 复核最小链路：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py
+
+4. qdot 很小，运动不明显
+   - 减小 jacobian_damping：
+     --jacobian-damping 0.04
+   - 增大 demo_force_x：
+     --demo-force-x 6
+   - 但要同时观察 joint_error_max 和 min_singular。
+
+安全与限幅
+----------
+- sim_08 默认偏移和速度都比较保守。
+- max_joint_velocity 限制 q_dot。
+- max_joint_step 限制每周期 q_des 跳变。
+- jacobian_damping 用来降低奇异点风险。
+- 当前仍是 Gazebo 学习脚本，不要直接迁移到实物。
+
+下一步
+------
+- 对比 sim_07 和 sim_08：
+  - sim_07 看 IK 解是否可达；
+  - sim_08 看连续速度映射是否更顺。
+- 当前 sim_10 已通过，所以 sim_08 的下一步重点是观察：
+  - /arm/joint_states 是否持续跟随 target_joints；
+  - qdot 是否因为奇异值过小而被限幅；
+  - 导纳 offset 是否能在撤力后回零。
+- 后续加入 Gazebo force/torque sensor 后，可以把 target_wrench 从虚拟力换成仿真接触力。
+- 再往后做擦桌子：x/y 给轨迹，z 方向用导纳或恒力控制。

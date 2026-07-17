@@ -1,0 +1,217 @@
+RM75-6F sim_06 升级与迭代计划
+=============================
+
+当前结论
+--------
+- sim_06 已经完成了从 action 分段执行到 /arm/arm_joint_controller/command 连续发布的升级。
+- 当前控制链路比 sim_05 更顺，但是本质仍然是 joint-proxy 学习版。
+- joint-proxy 的意思是：导纳模型仍然在笛卡尔空间产生 offset，但执行端用经验公式把 offset 映射成几个关节的小范围变化。
+- 所以它适合学习“外力 -> 导纳 -> 连续关节命令 -> Gazebo 运动”的流程，但还不是真正的末端笛卡尔柔顺控制。
+
+当前 ROS 控制链路
+----------------
+虚拟外力 /rm75_admittance_stream/target_wrench
+  -> sim_06 导纳模型 M/D/K
+  -> offset_m、velocity_mps、acceleration
+  -> map_offset_to_joint_target 经验映射
+  -> /arm/arm_joint_controller/command
+  -> Gazebo position JointTrajectoryController
+  -> /joint_states 反馈
+
+当前关键限制
+------------
+1. 末端位移不严格等于 target_pose
+   - /rm75_admittance_stream/target_pose 是导纳理论输出。
+   - 当前 joint-proxy 不能保证 link7 精确到这个位姿。
+
+2. 没有真实闭环末端误差修正
+   - 控制循环没有用当前末端实际位姿反算误差。
+   - 它主要围绕 equilibrium_joints 做小幅关节偏移。
+
+3. 没有真正使用机器人 Jacobian
+   - 当前不是 v_cartesian -> J^+ -> q_dot。
+   - 因此运动方向和真实末端方向只是在视觉上大致对应。
+
+4. Gazebo 里还没有真实六维力反馈
+   - 当前外力来自内置 demo force 或 topic wrench。
+   - 后续要做接触/擦桌子，需要 Gazebo force/torque sensor 或接触插件。
+
+推荐迭代路线
+------------
+
+第 1 轮：把 sim_06 打磨成稳定的连续关节命令实验
+------------------------------------------------
+状态：
+- 已开始落地到 sim_06。
+- 当前已加入关节目标一阶低通滤波、每周期关节步长限幅、/joint_states 反馈诊断、零外力回零收尾。
+
+目标：
+- 先不换 IK/Jacobian。
+- 改善顺滑性、可调性、观测性。
+- 让它成为后续所有柔顺控制实验的稳定基线。
+
+建议改动：
+- 增加 target_joints 的一阶低通滤波，降低关节目标跳变。
+- 增加每周期关节变化量限幅，例如 max_joint_step_rad。
+- 在 state topic 里发布更多诊断字段：
+  - dt
+  - raw_target_joints
+  - target_joints
+  - measured_joints
+  - joint_error_max
+- 增加参数：
+  - --joint-smoothing-alpha
+  - --max-joint-step
+  - --settle-duration
+- 让结束阶段明确回到 equilibrium_joints，而不是只继续发布当前 offset 对应目标。
+
+这轮完成后应该观察：
+- Gazebo 中运动更连续。
+- /joint_states 和 target_joints 的误差能看出来。
+- 不同 rate/horizon/smoothing 对运动质感的影响更清楚。
+
+第 2 轮：从 joint-proxy 升级到 IK 位置映射
+------------------------------------------
+状态：
+- 已新增 sim_07_admittance_ik_position.py。
+- 学习笔记：rm75_6f_admittance_ik_position_experiment.txt。
+
+目标：
+- 让导纳 offset 真正对应末端目标 pose。
+- 每周期根据 equilibrium_pose + offset 求一个关节目标。
+
+可能方案：
+- 使用 MoveIt 的 set_pose_target / plan 不适合高频循环，因为会卡顿和超时。
+- 更适合作为低频验证版：
+  - 每隔较长时间求一次 IK；
+  - 或者只用它验证某些目标 pose 是否可达。
+
+适合学习的脚本名称：
+- sim_07_admittance_ik_position.py
+
+风险：
+- MoveIt Python 每周期规划不是伺服控制，频率通常不够。
+- 全零或接近奇异姿态仍然可能失败。
+
+第 3 轮：升级到 Jacobian 伪逆速度映射
+-------------------------------------
+状态：
+- 已新增 sim_08_admittance_jacobian_velocity.py。
+- 学习笔记：rm75_6f_admittance_jacobian_velocity_experiment.txt。
+
+目标：
+- 用机器人雅可比矩阵把末端笛卡尔速度转换成关节速度。
+- 这比每周期 MoveIt 规划更接近真正控制器。
+
+核心关系：
+v_cartesian = J(q) * q_dot
+q_dot = J^+ * v_cartesian
+
+控制链路：
+虚拟外力 F
+  -> 导纳模型输出 offset 和 velocity
+  -> 取 velocity 作为末端期望速度
+  -> Jacobian pseudo-inverse 计算 q_dot
+  -> q_des = q_current + q_dot * dt
+  -> /arm/arm_joint_controller/command
+
+适合学习的脚本名称：
+- sim_08_admittance_jacobian_velocity.py
+
+需要重点加入的安全限制：
+- q_dot 限幅
+- q_des 关节限位
+- 奇异值阻尼伪逆 damped least squares
+- 近奇异报警
+- 控制频率和 dt 异常保护
+
+第 4 轮：加入 Gazebo 六维力/接触反馈
+------------------------------------
+目标：
+- 不再只用虚拟力，而是从 Gazebo 接触或 force/torque sensor 读 wrench。
+- 这一步是擦桌子实验前的关键准备。
+
+控制链路：
+Gazebo force/torque sensor
+  -> WrenchStamped
+  -> 导纳控制器
+  -> Jacobian/IK 后端
+  -> /arm/arm_joint_controller/command
+
+需要检查：
+- RM75-6F URDF/Xacro 是否有末端传感器 link。
+- Gazebo 插件是否能输出 wrench topic。
+- wrench 的 frame_id 是 base_link、link7 还是 sensor_link。
+- 是否需要 TF 把 wrench 转到 base_link 或 tool frame。
+
+第 5 轮：擦桌子实验
+------------------
+目标：
+- x/y 方向走擦拭轨迹。
+- z 方向做柔顺或恒力。
+- 姿态保持工具面朝桌面。
+
+建议控制分解：
+- x/y：给定轨迹，例如直线、往复、圆形。
+- z：导纳控制或目标接触力控制。
+- roll/pitch/yaw：先固定姿态。
+
+重要提醒：
+- 当前夹爪固定且没有自由度，不影响做末端柔顺。
+- 但擦桌子时必须定义 TCP/contact point，不能一直默认 link7 就是真实接触点。
+
+当前最推荐先做的升级
+--------------------
+建议下一步先做“第 1 轮”：
+- 保留 sim_06 的 joint-proxy 后端；
+- 增加关节目标滤波、每周期关节步长限幅、反馈诊断；
+- 把它打磨成一个稳定、可观察、可调参的基线实验。
+
+原因：
+- 这一步风险最小。
+- 可以直接改善你说的“卡卡的”感觉。
+- 后面切换 IK/Jacobian 时，滤波、限幅、诊断这些模块仍然能复用。
+
+第 1 轮建议命令
+---------------
+启动仿真：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+运行当前 sim_06 基线：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py
+
+调快但可能更抖：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 50 --command-horizon 0.08
+
+调慢但可能更稳：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 30 --command-horizon 0.16
+
+本轮升级后，更推荐的平滑参数：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 30 --command-horizon 0.16 --joint-smoothing-alpha 0.30 --max-joint-step 0.01
+
+本轮升级后，响应更快但仍保留一定整形：
+
+rosrun rm_75_demo sim_06_admittance_streaming_joint_proxy.py --rate 50 --command-horizon 0.08 --joint-smoothing-alpha 0.70 --max-joint-step 0.02
+
+观察输出：
+
+rostopic echo /rm75_admittance_stream/state
+rostopic echo -n1 /arm/arm_joint_controller/command
+rostopic echo -n1 /joint_states
+
+后续代码改动优先级
+------------------
+1. sim_06 增加平滑和诊断，作为稳定基线。
+2. 新建 sim_07 做 IK 位置映射验证，不替代 sim_06。
+3. 新建 sim_08 做 Jacobian 速度映射，作为真正柔顺控制的主线。
+4. 加 Gazebo wrench sensor 后，再做 sim_09 接触导纳。
+5. 最后做 sim_10 擦桌子实验。

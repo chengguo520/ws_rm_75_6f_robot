@@ -1,0 +1,18 @@
+<launch>
+  <!-- Read-only real RM75-6F force sensor bringup.
+       This launch file does not start Gazebo, MoveIt, motion commands, or force-position hybrid control. -->
+  <arg name="arm_ip" default="192.168.1.18" />
+  <arg name="arm_port" default="8080" />
+  <arg name="rate_hz" default="10.0" />
+  <arg name="zero_on_start" default="false" />
+
+  <node pkg="rm_75_real_force_control"
+        type="rm75_force_read_only_node"
+        name="rm75_force_read_only_node"
+        output="screen">
+    <param name="arm_ip" value="$(arg arm_ip)" />
+    <param name="arm_port" value="$(arg arm_port)" />
+    <param name="rate_hz" value="$(arg rate_hz)" />
+    <param name="zero_on_start" value="$(arg zero_on_start)" />
+  </node>
+</launch>

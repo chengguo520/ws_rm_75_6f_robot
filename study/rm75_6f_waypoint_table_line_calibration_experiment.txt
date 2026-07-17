@@ -1,0 +1,235 @@
+RM75-6F 基于示教点的桌面直线标定实验
+====================================
+
+实验目标
+--------
+- 使用示教器保存的两个点位 cazhuozi1 和 cazhuozi2，反推出擦桌子短直线。
+- 根据这条线段统一 Gazebo 可视桌子、RViz/MoveIt PlanningScene 碰撞桌、后续 sim_09 z 轴导纳默认参数。
+- 先验证无导纳 MoveL 直线，再把同一条线交给 z 轴导纳闭环。
+
+当前保存点
+----------
+点位文件：
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoints.yaml
+
+cazhuozi1（tcp_pose.frame_id = dummy）：
+- joints rad = [-0.0001, 0.1856, 0.1093, 1.3169, -0.0764, 0.9276, 0.5999]
+- joints deg = [-0.01, 10.64, 6.26, 75.45, -4.38, 53.15, 34.37]
+- link7 xyz = [0.3685, 0.0264, 0.4063]
+
+cazhuozi2（tcp_pose.frame_id = dummy）：
+- joints rad = [0.0188, 0.5548, 0.1067, 0.7853, -0.1014, 1.0904, 0.5785]
+- joints deg = [1.08, 31.79, 6.11, 44.99, -5.81, 62.48, 33.15]
+- link7 xyz = [0.4512, 0.0264, 0.4063]
+
+推导结果
+--------
+- 线段方向：几乎纯 base_link +X 方向。
+- 线段长度：0.0826 m。
+- 线段中心：[0.4098, 0.0264, 0.4063]，坐标系是 dummy。
+- 当前虚拟 TCP 假设：tcp_z = link7_z - 0.040。
+- 推导 Gazebo/world 可视桌面高度：surface_z = 0.3663 m，坐标系是 dummy/world。
+- dummy -> base_link 是固定 +0.030 m，所以 sim_09 这种按 base_link 计算 TF 的脚本应使用 surface_z = 0.3363 m。
+- Gazebo 可视桌子中心：[0.6398, 0.0264, 0.3413]。
+- 桌子主体相对擦拭短线向 +X 前方移动 0.230 m，让靠机器人侧桌边远离机械臂下部连杆。
+- MoveIt collision 桌面为了避免接触点位被硬碰撞判失败，下沉 0.080 m，collision top z = 0.2863 m。
+- MoveIt collision 桌子中心：[0.6398, 0.0264, 0.2613]。
+- 桌子尺寸：[0.7600, 0.4400, 0.0500]。
+- 按 x 方向估算，桌面覆盖约 x = [0.260, 1.020] m；当前擦拭短线 x = [0.369, 0.451] m，仍在桌面上。
+- 后续 sim_09 的 18 cm 长擦拭线 x = [0.320, 0.500] m，距离靠机器人侧桌边还有约 0.060 m；桌边本身比旧版 x=0.150 后退到 x=0.260，降低下部连杆视觉擦碰桌边的风险。
+
+相关脚本
+--------
+新增脚本：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_12_waypoint_table_line_calibration.py
+
+这个脚本负责：
+- 读取 waypoint YAML；
+- 打印两点关节角、TCP/link7 位姿、线段长度；
+- 根据 tool_offset_z 推导桌面高度；
+- 默认使用 waypoint YAML 中保存的坐标系。当前 cazhuozi1/cazhuozi2 都是 dummy，不能强行当成 base_link；
+- 把同一张桌子加入 MoveIt PlanningScene；
+- 可选 MoveJ 到起点；
+- 可选从当前位姿 MoveL 到终点。
+
+命令行操作
+----------
+一键启动 Gazebo + MoveIt + RViz，并自动读取 cazhuozi1/cazhuozi2 加入桌子：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch
+
+这条命令默认不会移动机械臂，只负责：
+- 启动 Gazebo 可视桌面；
+- 启动 MoveIt 和 RViz；
+- 读取保存点；
+- 推导擦拭线和桌面；
+- 把桌子加入 RViz/MoveIt PlanningScene。
+
+推荐流程 A：先启动环境和桌子，再在另一个终端分步动作
+--------------------------------------------------
+终端 1：启动 Gazebo + MoveIt + RViz，并自动加桌子到 PlanningScene：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch
+
+终端 2：规划并执行 MoveJ 到起点 cazhuozi1：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command start
+
+终端 2：到达起点后，只规划 cazhuozi1 -> cazhuozi2 的 MoveL，不执行：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command plan-line
+
+终端 2：确认 RViz 里的直线路径合理后，执行 MoveL：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command execute-line
+
+推荐流程 B：launch 启动后自动到起点，再用另一个终端走直线
+--------------------------------------------------------
+终端 1：启动环境、加桌子，并自动 MoveJ 到 cazhuozi1：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch command:=start
+
+终端 2：只规划直线：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command plan-line
+
+终端 2：执行直线：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command execute-line
+
+推荐流程 C：一条 launch 命令完成“到起点 + 规划直线”
+------------------------------------------------
+这条命令会运动到起点，但只规划直线，不执行直线：
+
+roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch command:=start-plan-line
+
+如果确认流程已经稳定，才使用下面的一键执行直线命令：
+
+roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch command:=start-execute-line
+
+只读取点位并打印推导结果，不需要 ROS master：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --report-only
+
+启动 Gazebo/MoveIt/RViz 后，只加桌子和打印报告，不执行：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py
+
+规划到起点，但不执行：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --plan-start
+
+执行 MoveJ 到 cazhuozi1：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --go-start
+
+到达起点后，规划到 cazhuozi2 的 MoveL 直线，但不执行：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --plan-line
+
+确认 RViz 路径合理后，执行这条 MoveL：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --plan-line --execute-line
+
+常用组合：先到起点，再规划直线：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --go-start --plan-line
+
+如果碰撞检查因为工具贴桌太近导致 fraction 低，仅用于诊断时可以关闭碰撞检查：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --go-start --plan-line --no-avoid-collisions
+
+已经同步的默认参数
+------------------
+- Gazebo world：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/worlds/rm75_bumpy_wiping_table.world
+  Gazebo/world 可视桌面 top z = 0.366
+- sim_12 MoveIt 桌面标定：
+  surface_z = 0.336（base_link 坐标系）
+  table_center_x = 0.640
+  table_center_y = 0.026
+  table_size_x = 0.760
+- sim_09 z 轴导纳擦拭：
+  surface_z = 0.336（base_link 坐标系）
+  line_center_x = 0.410
+  line_center_y = 0.026
+  prepare_joints = cazhuozi1
+
+本次排查结论
+------------
+- real_teach_pendant.py 保存的 tcp_pose.frame_id 是 MoveIt planning frame：dummy。
+- sim12 早期版本把这个 pose 当成 base_link 使用，导致执行后 TCP 在 dummy 下比目标高 30 mm。
+- 30 mm 的来源是 rm_75_6f_gazebo.urdf.xacro 中 dummy_joint 的固定变换：
+  dummy -> base_link: z = +0.030 m。
+- 修正后，sim12 默认 --reference-frame auto，会自动使用 waypoint 保存的 dummy 坐标系。
+- sim09 仍然用 base_link -> link7 的 TF 做导纳，所以 sim12 打印的 Suggested sim_09 args 会把 surface_z 自动换算成 0.336。
+
+本次闭环验证
+------------
+在后台 Gazebo + MoveIt 已启动的情况下执行：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command start --velocity 0.06 --acceleration 0.05
+
+结果：
+- MoveJ plan success=True
+- MoveJ execute result=True
+
+继续执行直线：
+
+rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command execute-line --velocity 0.05 --acceleration 0.04
+
+结果：
+- MoveL plan fraction=1.000
+- MoveL execute result=True
+
+执行后读取 /arm/joint_states 和 MoveIt 当前 link7 位姿：
+- TCP current xyz = [0.451165, 0.026360, 0.406259]
+- TCP target xyz  = [0.451165, 0.026367, 0.406270]
+- TCP position error norm = 0.01 mm
+- 最大关节反馈误差 = 0.147 deg
+
+这说明：cazhuozi1 -> cazhuozi2 的无导纳 MoveL 直线已经跑通，可以作为后续 z 轴导纳擦拭的 x 方向基准路径。
+
+示教器调整
+----------
+real_teach_pendant.py 的 --profile sim 已调整：
+- 关节滑条范围：90 度。
+- 关节按钮步长：5 度。
+- TCP Pose IK 平移范围：0.20 m。
+- TCP Pose IK 姿态范围：60 度。
+- TCP Pose IK 默认平移步长：0.02 m。
+- TCP Pose IK 默认姿态步长：10 度。
+
+Gazebo 控制器调整
+----------------
+rm_75_trajectory_control.yaml 中的 goal_time 已从 2.0 s 放宽到 8.0 s。
+原因：仿真中大角度调姿态时，Gazebo 控制器可能比 MoveIt 估计时间慢，过短的 goal_time 容易导致 TIMED_OUT。
+
+观察现象
+--------
+- Gazebo 和 RViz/MoveIt 中桌子应在同一条擦拭线下方。
+- 蓝色擦拭带应围绕 cazhuozi1 -> cazhuozi2 的 x 方向短线。
+- sim12 --report-only 应显示 line length 约 0.0826 m。
+- sim12 加桌后，RViz PlanningScene 应显示桌子碰撞物。
+
+下一步
+------
+- 先用 sim12 验证 cazhuozi1 -> cazhuozi2 的纯 MoveL。
+- 如果 MoveL fraction 稳定接近 1.0，再把 sim09 的 x_line/z 导纳控制切到这条线。
+- 后续把 virtual_contact_force() 替换为 Gazebo contact/force sensor 或真实六维力读数。

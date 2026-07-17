@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="rm75_bumpy_wiping_table">
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!--
+      Gazebo visual world for sim_09.
+      The table is placed near the wiping-ready workspace but not tucked
+      against the robot base. In Gazebo/world (same as the robot dummy root here),
+      the visible top surface is z=0.366 m. The controller scripts that work in
+      base_link use z=0.336 m because dummy -> base_link is a fixed +0.030 m.
+
+      The visible table body is shifted forward in +X relative to the wiping
+      line, so the robot-side edge is not tucked against the lower arm. With the
+      current dimensions the near edge is about x=0.26 m while the long wiping
+      stroke starts around x=0.32 m.
+
+      The current controller still uses a mathematical virtual normal force
+      instead of Gazebo contact feedback. This world makes the surface visible
+      and aligned with the control model so the motion reads like table wiping.
+      The table is visual-only for this stage; physical collision/contact will
+      be added after a dedicated force-sensor validation step.
+    -->
+    <model name="bumpy_wiping_table">
+      <static>true</static>
+      <pose>0.640 0.026 0.341 0 0 0</pose>
+      <link name="table_link">
+        <visual name="table_visual">
+          <geometry>
+            <box>
+              <size>0.76 0.44 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.18 0.22 0.20 1.0</ambient>
+            <diffuse>0.22 0.28 0.25 1.0</diffuse>
+            <specular>0.05 0.05 0.05 1.0</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Blue straight wiping lane: sim_09 now uses a longer 18 cm stroke on this x-direction line. -->
+    <model name="wiping_lane">
+      <static>true</static>
+      <pose>0.410 0.026 0.369 0 0 0</pose>
+      <link name="lane_link">
+        <visual name="lane_visual">
+          <geometry>
+            <box>
+              <size>0.24 0.09 0.004</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.05 0.35 0.85 0.65</ambient>
+            <diffuse>0.05 0.35 0.85 0.65</diffuse>
+          </material>
+          <transparency>0.35</transparency>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      Visual-only smooth sine-squared wave surface for x_wave mode.
+      This DAE mesh is a continuous ribbon: two smooth raised humps with a
+      low valley between them. It is deliberately visual-only; sim_09 computes
+      the matching virtual height field and force in code.
+    -->
+    <model name="smooth_wave_surface">
+      <static>true</static>
+      <pose>0.410 0.026 0.366 0 0 0</pose>
+      <link name="wave_link">
+        <visual name="wave_surface_visual">
+          <geometry>
+            <mesh>
+              <uri>file:///home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/meshes/smooth_wave_surface.dae</uri>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>1.00 0.45 0.05 0.92</ambient>
+            <diffuse>1.00 0.38 0.06 0.92</diffuse>
+            <specular>0.08 0.08 0.08 1.0</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

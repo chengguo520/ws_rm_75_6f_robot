@@ -1,0 +1,261 @@
+RM75-6F 实物柔顺调控操作指南
+============================
+
+记录日期
+--------
+2026-06-03
+
+资料来源
+--------
+- 对话记录：
+  /home/ros/ws_rm_75_6f_robot/study/2026-06-01-0430_vscode_019e8171-750e-7261-8afd-63018bdecf53_RM75-6F/transcript.md
+- 厂家 C++ API 文档：
+  /home/ros/机械臂/睿尔曼机械臂接口函数说明(c++)V4.0.2.pdf
+- 厂家资料包：
+  /home/ros/机械臂/RM-75系列机械臂
+- 本地 API 头文件：
+  /home/ros/机械臂/rm_lib_4_0_5/include/rm_base.h
+- 本地 CMake 示例：
+  /home/ros/机械臂/rm_base_cmake_example
+
+核心结论
+--------
+实物 RM75-6F 的柔顺调控不要照搬 Gazebo 里的导纳节点。
+
+Gazebo 路线是：
+虚拟力或仿真力传感器
+  -> 自己写导纳模型
+  -> 关节/末端目标
+  -> Gazebo 控制器
+
+实物优先路线是：
+真实末端六维力传感器
+  -> 厂家控制器底层力位混合模块
+  -> Set_Force_Postion 或 Force_Position_Move_*
+  -> 真实机械臂执行
+
+也就是说，实物阶段先用厂家 API 自带的力位混合，不要一开始就自己写高频力闭环去硬控实物。
+
+推荐实物调试顺序
+----------------
+阶段 0：安全准备
+- 机械臂周围清空，准备实体急停按钮。
+- 工具端固定夹爪可以保留，作为刚性工具/TCP 使用。
+- 先确认工具坐标系 TCP。如果后续擦桌子，TCP 应该尽量定义到夹爪/工具实际接触点。
+- 速度先设低，建议 5%~10% 或很小的 MoveL/MoveJ 速度。
+- 碰撞等级可以从较低等级开始打开，例如 1~3，避免一上来设太灵敏导致误触发。
+
+阶段 1：只读六维力，不控制机械臂
+- 连接机械臂控制器。
+- 机械臂静止、末端不接触外界时调用 Clear_Force_Data。
+- 周期读取 Get_Force_Data。
+- 用手轻推末端，确认 Fx/Fy/Fz/Mx/My/Mz 的符号和坐标系方向。
+
+阶段 2：普通力位混合，单方向小力
+- 先做空中或软接触测试，不要直接压硬桌面。
+- 推荐从工具坐标系 Z 方向 2N 开始。
+- 调用 Set_Force_Postion 开启单方向力控。
+- 同时用低速 MoveL/MoveJ 给位置方向的运动。
+- 结束后必须调用 Stop_Force_Postion。
+
+阶段 3：擦桌子类实验
+- x/y 方向走低速擦拭轨迹。
+- z 方向用厂家力位混合维持下压力。
+- 目标力建议从 2N 开始，稳定后再尝试 3N~5N。
+- 每次实验结束先 Stop_Force_Postion，再撤离桌面。
+
+阶段 4：透传力位混合补偿
+- 这是高级路线，适合“自己周期性发轨迹，同时让底层做力补偿”。
+- 先 Start_Force_Position_Move。
+- 周期性调用 Force_Position_Move_POSE 或 Force_Position_Move_Joint。
+- 结束后调用 Stop_Force_Postion_Move。
+
+关键 API
+--------
+初始化和连接：
+RM_API_Init(ARM_75, callback)
+Arm_Socket_Start(arm_ip, arm_port, recv_timeout)
+Arm_Socket_State(ArmSocket)
+Arm_Socket_Close(ArmSocket)
+RM_API_UnInit()
+
+状态和安全：
+Get_Current_Arm_State(ArmSocket, joint, pose, Arm_Err, Sys_Err)
+Get_Arm_All_State(ArmSocket, joint_state)
+Set_Collision_Stage(ArmSocket, stage, block)
+Move_Stop_Cmd(ArmSocket, block)
+
+六维力：
+Get_Force_Data(ArmSocket, Force)
+Clear_Force_Data(ArmSocket, block)
+Set_Force_Sensor(ArmSocket)
+Manual_Set_Force(ArmSocket, type, joint)
+Stop_Set_Force_Sensor(ArmSocket, block)
+
+普通力位混合：
+Set_Force_Postion(ArmSocket, sensor, mode, direction, N, block)
+Stop_Force_Postion(ArmSocket, block)
+
+透传力位混合补偿：
+Start_Force_Position_Move(ArmSocket, block)
+Force_Position_Move_POSE(ArmSocket, pose, sensor, mode, dir, force)
+Force_Position_Move_Joint(ArmSocket, joint, sensor, mode, dir, force)
+Stop_Force_Postion_Move(ArmSocket, block)
+
+注意：
+- 厂家函数名拼写是 Postion，不是 Position，代码里必须按头文件写。
+- V4.0.2 PDF 中 Set_Force_Postion 的函数原型排版缺参数，但参数表和本地 rm_base.h 一致。实际开发以头文件为准。
+
+参数解释
+--------
+Set_Force_Postion(ArmSocket, sensor, mode, direction, N, block)
+
+sensor:
+  0 = 一维力
+  1 = 六维力
+
+mode:
+  0 = 基坐标系力控
+  1 = 工具坐标系力控
+
+direction:
+  0 = X
+  1 = Y
+  2 = Z
+  3 = Rx
+  4 = Ry
+  5 = Rz
+
+N:
+  力大小，单位 0.1N。
+  2N 传 20。
+  5N 传 50。
+
+block:
+  RM_NONBLOCK = 0，非阻塞。
+  RM_BLOCK = 1，阻塞等待控制器返回。
+
+Force_Position_Move_POSE / Force_Position_Move_Joint 的 force：
+  单位是 N。
+  这里和 Set_Force_Postion 的 0.1N 不一样。
+
+六维力读取注意点
+----------------
+Get_Force_Data 返回数组：
+Force[0] = Fx，单位 N
+Force[1] = Fy，单位 N
+Force[2] = Fz，单位 N
+Force[3] = Mx，单位 Nm
+Force[4] = My，单位 Nm
+Force[5] = Mz，单位 Nm
+
+厂家文档说明，周期读取六维力数据时周期不能小于 50ms，也就是最高约 20Hz。
+实物第一步应该只读力，不闭环控制。
+
+普通力位混合最小流程
+--------------------
+伪代码：
+
+RM_API_Init(ARM_75, callback);
+sock = Arm_Socket_Start("192.168.1.18", arm_port, timeout);
+Arm_Socket_State(sock);
+
+Set_Collision_Stage(sock, 1, RM_BLOCK);
+
+移动到桌面上方安全位姿;
+Clear_Force_Data(sock, RM_BLOCK);
+
+// 使用六维力，工具坐标系，Z 方向，目标力 2N。
+Set_Force_Postion(sock, 1, 1, 2, 20, RM_BLOCK);
+
+// 低速执行 x/y 擦拭轨迹，z 方向由底层力位混合补偿。
+Movel_Cmd(sock, pose_1, low_speed, 0, RM_BLOCK);
+Movel_Cmd(sock, pose_2, low_speed, 0, RM_BLOCK);
+
+Stop_Force_Postion(sock, RM_BLOCK);
+撤离桌面;
+
+Arm_Socket_Close(sock);
+RM_API_UnInit();
+
+透传力位混合最小流程
+--------------------
+伪代码：
+
+RM_API_Init(ARM_75, callback);
+sock = Arm_Socket_Start("192.168.1.18", arm_port, timeout);
+
+Clear_Force_Data(sock, RM_BLOCK);
+Start_Force_Position_Move(sock, RM_BLOCK);
+
+循环发送目标位姿或目标关节角：
+  Force_Position_Move_POSE(sock, target_pose, 1, 1, 2, 2.0);
+  // sensor=1 六维力，mode=1 工具坐标系，dir=2 Z方向，force=2.0N。
+
+Stop_Force_Postion_Move(sock, RM_BLOCK);
+Arm_Socket_Close(sock);
+RM_API_UnInit();
+
+命令行操作
+----------
+先编译厂家 CMake 示例，确认本机能链接厂家库：
+
+cd /home/ros/机械臂/rm_base_cmake_example
+mkdir -p build
+cd build
+cmake ..
+make
+
+示例程序运行命令：
+
+cd /home/ros/机械臂/rm_base_cmake_example/build
+./rm_camke_example
+
+注意：
+- 不要直接运行示例里的力控 demo 去碰真实桌面。先把 main.cpp 改成“只连接、只读力、只打印”的版本。
+- 示例里的 IP、端口、速度、目标位姿必须按现场机械臂配置修改。
+
+实物擦桌子建议参数
+------------------
+第一次接触：
+- target_force = 2N
+- Set_Force_Postion 的 N = 20
+- sensor = 1
+- mode = 1
+- direction = 2
+- 轨迹速度很低，先只移动 1cm~2cm
+
+稳定后：
+- target_force = 3N~5N
+- Set_Force_Postion 的 N = 30~50
+- x/y 擦拭幅度逐步增加
+
+不建议一开始做的事情
+--------------------
+- 不要一开始就让末端压硬桌面。
+- 不要一开始就用 10N 以上的大力。
+- 不要没确认坐标方向就开力控。
+- 不要把 Gazebo 的导纳参数 M/D/K 直接套到实物厂家力位混合。
+- 不要同时混用普通力位混合和透传力位混合。
+- 不要忘记 Stop_Force_Postion 或 Stop_Force_Postion_Move。
+
+后续 ROS 封装建议
+-----------------
+如果要把厂家 API 接进 ROS，建议先做一个很小的节点：
+
+发布：
+/rm75_force_sensor/wrench
+  geometry_msgs/WrenchStamped
+  来源：Get_Force_Data
+
+服务：
+/rm75_force_sensor/zero
+  调用 Clear_Force_Data
+
+/rm75_force_control/start_hybrid
+  调用 Set_Force_Postion
+
+/rm75_force_control/stop_hybrid
+  调用 Stop_Force_Postion
+
+先把“读力、清零、开力控、停力控”这四件事封装清楚，再考虑透传轨迹和擦桌子任务节点。

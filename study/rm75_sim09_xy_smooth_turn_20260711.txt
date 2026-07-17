@@ -1,0 +1,152 @@
+RM75-6F sim_09 XY 平滑换向与误差拆分（2026-07-11）
+===================================================
+
+实验目标
+--------
+解决旧三角波参考在端点速度瞬间反向导致的 x 方向滞后，并区分沿线跟踪误差与横向偏离误差。
+
+修改内容
+--------
+1. StraightLinePath 从速度突变的三角波改为端点余弦速度混合。
+   - 中段速度保持 line_speed。
+   - 在端点的 line_turn_time 内，参考速度由 +V 经 0 连续变到 -V。
+   - 位置、速度和加速度连续；不会要求机械臂在一个 30 Hz 周期内完成 +V 到 -V 的变化。
+   - 默认 line_turn_time=0.5 s。
+
+2. 将平面误差拆分并写入 ROS state/CSV/实时图：
+   - x_error=x_ref-x_actual，沿擦拭线滞后/超前。
+   - y_error=y_ref-y_actual，横向偏离直线。
+   - xy_error=sqrt(x_error^2+y_error^2)，保留为总平面误差。
+   - xy_ref_vx，参考 x 速度；端点应平滑经过 0 后变号。
+
+关键轨迹公式
+------------
+设 V=line_speed，T=line_turn_time，端点混合距离 d=V*T/pi。
+
+端点混合区中：
+v_ref(t)=V*cos(pi*t/T), 0<=t<=T
+
+因此 v_ref 从 +V 连续变为 -V，在 t=T/2 时为 0；端点位置同时保持在线段边界。完整周期为：
+
+period = 2*line_length/V + 2*T*(1-2/pi)
+
+默认 line_length=0.180 m、V=0.004 m/s、T=0.5 s 时，period 约 90.36 s。
+
+运行命令
+--------
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch gui:=false use_rviz:=false plot_backend:=Agg plot_max_samples:=8000 duration:=61 line_speed:=0.006 line_turn_time:=0.5 wave_height:=0.014 max_xy_velocity:=0.018
+
+控制器准备完成后发布固定导纳参数：
+
+rostopic pub -1 /rm75_z_admittance_probe/tuning_command std_msgs/String 'data: "{\"action\":\"start\",\"normal_mass\":1.5,\"normal_damping\":65.0,\"desired_normal_force\":6.0}"'
+
+观察现象
+--------
+- 实时图最后一框中，x_error、y_error、xy_error 同时显示。
+- x_error 在端点前后应比旧三角波更平滑，y_error 应保持接近 0。
+- 日志中的 vx_ref 应连续经过 0，而不是从 +0.0060 直接跳到 -0.0060。
+- 使用相同 H=14 mm、V=6 mm/s 工况，对比旧实验 xy 峰值 13.3 mm 和新的 xy 峰值。
+
+判读原则
+--------
+- x_error 大、y_error 小：沿线跟不上，优先看换向轨迹、xy_hold_gain、速度/关节限幅。
+- y_error 大：横向擦偏，检查坐标系、工具姿态、Jacobian 和 y 方向控制。
+- xy_error 只是合成量，不能单独证明“偏离了直线”。
+
+安全与限幅
+----------
+- 保持 M=1.5 kg、D=65 N s/m、Fd=6 N。
+- 默认 max_xy_velocity=0.018 m/s、max_joint_velocity=0.08 rad/s、max_joint_step=0.004 rad/control-cycle。
+- 这是 Gazebo 虚拟接触实验；不得直接迁移到实物。
+
+对照结果：H=14 mm，V=6 mm/s
+---------------------------
+固定 M/D/Fd=1.5/65/6，30 Hz，完整 60.94 s 单周期。旧数据为三角速度参考，
+新数据为 0.5 s 端点余弦换向。
+
+1. 仅改平滑换向、max_xy_velocity=0.012 m/s：
+   - CSV: study/data/sim09_runs/sim09_20260711_101336_pid9625/state.csv
+   - x_rms=6.766 mm，x_peak=13.2 mm；y_rms=0.208 mm，y_peak=0.3 mm。
+   - xy_rms=6.769 mm，xy_peak=13.2 mm，仍为 CHECK。
+   - 峰值发生在右端点前的减速段；此时补偿后的 vx_command 已被 12 mm/s 上限截断。
+
+2. 平滑换向 + max_xy_velocity=0.018 m/s：
+   - CSV: study/data/sim09_runs/sim09_20260711_101831_pid13039/state.csv
+   - x_rms=3.176 mm，x_peak=6.9 mm；y_rms=0.234 mm，y_peak=0.4 mm。
+   - xy_rms=3.184 mm，xy_peak=6.9 mm，由 CHECK 变为 PASS。
+   - force_rms=0.297 N，eq_rms=0.311 mm，Z 速度饱和率=0%。
+   - min_singular=0.03559，高于告警线 0.020；max_qdot=0.0638 rad/s，低于 0.08 rad/s 限幅。
+
+结论：平滑换向是合理且必要的参考轨迹修正，但本次高速误差的主因是切向
+速度限幅不足，不是 y 方向擦歪，也不是 Z 方向导纳参数失稳。0.018 m/s 是当前
+Gazebo 工况下经过一次单变量验证的默认值；继续提高前，必须同时检查 min_singular
+和 max_qdot。
+
+H=20 mm、V=6 mm/s 压力复验（2026-07-13）
+------------------------------------------
+固定 M/D/Fd=1.5/65/6，line_turn_time=0.5 s，max_xy_velocity=0.018 m/s，
+完整运行 60.97 s。原始数据：
+study/data/sim09_runs/xy_recheck_h20_v6/sim09_20260713_093937_pid5073/state.csv
+
+- 新结果：force_rms=0.353 N，eq_rms=0.376 mm，Z 速度饱和率=0%，无虚拟接触丢失。
+- x_rms=3.159 mm，x_peak=6.4 mm；y_rms=0.226 mm，y_peak=0.4 mm；因此 xy_rms=3.167 mm、xy_peak=6.4 mm，XY 指标通过。
+- x_span=174.1 mm，说明完整擦拭线已被较好覆盖；旧版本在该速度只覆盖约 169 mm。
+- min_singular=0.03488，max_qdot=0.0729 rad/s，小于 0.08 rad/s 的关节速度限幅。
+- 但 joint_error_max=0.0119 rad，略超过当前 0.0100 rad 的验收线，所以整体仍为 CHECK。
+
+这次压力复验确认：旧 H=20 mm、V=6 mm/s 的主要 XY 跟踪问题已经由平滑换向和
+0.018 m/s 切向上限解决；剩余问题是高曲率回程阶段的关节位置跟踪余量，不应回头
+修改已经稳定的 M/D/Fd。下一步应围绕 JointTrajectoryController 的关节误差进行
+小范围单变量验证，并保持当前 XY 与 Z 参数不变。
+
+关节轨迹时间参数定位实验（开始于 2026-07-13）
+----------------------------------------------
+问题假设
+--------
+H=20 mm、V=6 mm/s 的 max_qdot=0.0729 rad/s，小于 max_joint_velocity=0.08 rad/s；
+每周期积分量约为 0.0729/30=0.00243 rad，也小于 max_joint_step=0.004 rad。因此
+0.0119 rad 的 joint_error_max 不是两个显式限幅直接造成的。
+
+控制器每 1/30 s 发布一条短 JointTrajectory。旧设置的 command_horizon=0.16 s，
+代表每个新目标都被要求在 160 ms 内到达，但它会在约 33 ms 后被下一条目标覆盖。
+这相当于额外引入了平滑/滞后。第一轮固定其余条件，仅将 horizon 降为 0.10 s，
+以检验是否能减小 joint_error_max；不能因此改变 M/D/Fd、曲面或擦拭速度。
+
+记录要求
+--------
+- launch 现在显式暴露 control_rate、command_horizon、lead_time、stamp_mode。
+- 控制器 state 和 state.csv 同时记录 command_horizon_s、lead_time_s，确保后续汇总
+  能分辨相同 M/D/Fd 下不同的轨迹时序。
+- 通过条件仍是 joint_error_max<=0.0100 rad；同时不能使 force/XY/Z 指标退化。
+- 注意：第一轮 CSV 的 stamp_mode 独立列为空，但 raw_state 已完整保存 stamp_mode=future；
+  该记录字段已在复验前修正，不影响其余数值指标。
+
+H=20 mm、V=6 mm/s 的 horizon 对照结果
+-----------------------------------------
+固定 M/D/Fd=1.5/65/6、line_turn_time=0.5 s、max_xy_velocity=0.018 m/s、
+max_joint_velocity=0.08 rad/s、max_joint_step=0.004 rad，且只改变 command_horizon。
+
+旧基线：horizon=0.16 s
+- CSV: study/data/sim09_runs/xy_recheck_h20_v6/sim09_20260713_093937_pid5073/state.csv
+- force_rms=0.353 N，eq_rms=0.376 mm，xy_rms=3.167 mm，xy_peak=6.4 mm。
+- joint_error_max=0.01190 rad，因此总验收为 CHECK。
+
+新设置：horizon=0.10 s，第一次
+- CSV: study/data/sim09_runs/joint_timing_h10/sim09_20260713_140901_pid10777/state.csv
+- force_rms=0.351 N，force_peak=0.755 N，eq_rms=0.374 mm，xy_rms=3.122 mm，
+  xy_peak=6.3 mm，joint_error_max=0.00890 rad，全部 PASS。
+
+新设置：horizon=0.10 s，独立复验
+- CSV: study/data/sim09_runs/joint_timing_h10_repeat/sim09_20260713_141411_pid4880/state.csv
+- force_rms=0.351 N，force_peak=0.752 N，eq_rms=0.374 mm，xy_rms=3.121 mm，
+  xy_peak=6.4 mm，joint_error_max=0.00890 rad，全部 PASS。
+
+结论
+----
+两次 0.10 s 复验都使 joint_error_max 从 0.01190 rad 降至 0.00890 rad，降低约 25%，
+同时没有恶化法向力、平衡高度、Z 速度饱和率或 XY 跟踪。因此将
+command_horizon=0.10 s 作为当前 sim_09 的默认轨迹时序；lead_time=0.03 s、
+stamp_mode=future 保持不变。这个结论只适用于当前 Gazebo 位置轨迹控制器和 30 Hz
+外环，不可直接套用到实物或不同控制器。

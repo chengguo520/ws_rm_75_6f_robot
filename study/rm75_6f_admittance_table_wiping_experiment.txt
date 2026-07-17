@@ -1,0 +1,874 @@
+RM75-6F sim_09：固定直线擦拭 + z 单轴导纳验证
+================================================
+
+实验目标
+--------
+- 默认一键演示运行 x_wave 慢速擦拭：沿更长的 x 方向直线往复，y 固定，z 方向根据平滑正弦平方虚拟曲面上下柔顺。
+- Gazebo 世界中直接放入可见桌面、长擦拭线和平滑正弦曲面网格，避免只看机械臂运动却不知道它在“擦哪里”。
+- 保留 z_probe、x_line、x_bump 模式，方便回退验证单轴导纳、固定直线擦拭或单凸起擦拭。
+- 当前力反馈仍是虚拟力场，不是真实 Gazebo 接触力；后续再接 Gazebo contact/force sensor 或真实六维力传感器。
+
+这次为什么先不做完整擦桌子
+--------------------------
+- sim_10 已经证明：/arm/arm_joint_controller/command 能驱动 Gazebo 关节，/arm/joint_states 会真实变化。
+- sim_08 已经证明：导纳速度 -> Jacobian -> q_dot -> 关节命令这条链路能稳定运行。
+- z_probe 模式已经用于验证：TCP/contact_z、虚拟桌面高度、法向力、z 导纳之间能闭成一个稳定小环。
+- x_line 模式：只加入 x 方向慢速往复，y 仍固定，z 仍沿用同一套导纳。
+- x_bump 模式：在 x_line 的基础上，把时间台阶换成空间高度场 surface_z = height(x, y)。
+- x_wave 模式：在更长直线上使用正弦平方曲面，形成两个平滑凸起和一个中间低谷，让视觉和数据里的 z 方向柔顺更明显。
+- 当前一键演示默认使用 x_wave；x_line 和 x_bump 仍作为对照实验保留。
+
+Gazebo 桌面和反馈关系
+--------------------
+- 专用世界文件：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/worlds/rm75_bumpy_wiping_table.world
+- 专用启动文件：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_gazebo/launch/arm_75_bumpy_wiping_moveit.launch
+- 桌面顶面大约在 z = 0.366 m，擦拭线中心大约在 x = 0.410 m, y = 0.026 m。
+- Gazebo 可视桌子主体中心已前移到 x = 0.640 m、尺寸 x = 0.760 m。
+- 这样桌子靠机器人侧边缘从旧版约 x = 0.150 m 后退到约 x = 0.260 m，避免机械臂下部连杆视觉上擦到桌子近端边。
+- 旧版擦拭线长度是 0.080 m，也就是 8 cm。
+- 当前 x_wave 一键演示把擦拭线长度加到 0.180 m，也就是 18 cm，范围大约 x = [0.320, 0.500] m，仍在桌面范围内。
+- 这组位置来自示教器保存点 cazhuozi1 -> cazhuozi2：link7 约在 z=0.406 m，按 tool_offset_z=0.040 推导虚拟 TCP/桌面约在 0.366 m。
+- 之前直接从零位启动时，link7 局部 Z 轴几乎朝上，min_singular 接近 0，机械臂是在奇异姿态附近拖着法兰去找桌面，不是真正擦拭姿态。
+- Gazebo 桌面负责视觉对齐；sim_09 的 z 导纳反馈仍由 surface_z、tcp_z、penetration 计算得到。
+- 这一步桌子先做可见模型，不让它和机械臂发生物理碰撞，避免位置控制器和硬碰撞互相顶住。
+- 这样做的好处是先保证控制链路稳定、动作可理解；坏处是目前还不是物理碰撞力闭环。
+- 当前 Gazebo 桌面不会自动出现在 RViz 里；RViz 只能看到 RobotModel 和 sim_09 发布的 MarkerArray 虚拟桌面/擦拭线。
+- 如果要让 RViz/MoveIt 真正拥有桌面碰撞物，使用 sim_12_waypoint_table_line_calibration.py。它会读取示教器保存的 cazhuozi1/cazhuozi2，把桌子加入 PlanningScene，并支持执行纯 Cartesian MoveL 直线。
+
+适用环境
+--------
+- 工作区：/home/ros/ws_rm_75_6f_robot
+- ROS：ROS1 Noetic
+- 仿真：Gazebo + MoveIt + ros_control
+- 控制器：/arm/arm_joint_controller，position JointTrajectoryController
+- 脚本：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_09_admittance_table_wiping.py
+- 一键演示 launch：
+  /home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/launch/sim_09_bumpy_wiping_demo.launch
+
+ROS 框架关系
+------------
+主要节点：
+
+1. /gazebo
+   - 负责 RM75-6F 仿真。
+
+2. /move_group
+   - sim_09 使用 MoveGroupCommander.get_jacobian_matrix 计算当前关节角下的 Jacobian。
+   - 控制循环中不做路径规划，只用 Jacobian。
+
+3. /arm/arm_joint_controller
+   - 接收 /arm/arm_joint_controller/command。
+   - 执行短 horizon JointTrajectory 位置命令。
+
+4. sim_09_admittance_table_wiping.py
+   - 读取 /arm/joint_states 作为真实关节反馈。
+   - 通过 TF 读取 base_link -> link7，作为末端真实位姿反馈。
+   - 定义一个虚拟 TCP：contact_z = link7_z - tool_offset_z。
+   - 建立一个虚拟桌面高度 surface_z。
+   - 根据 penetration = surface_z - tcp_z 计算虚拟法向力。
+   - 用 z 单轴导纳计算 vz。
+   - 用 Jacobian DLS 把 [vx, vy, vz, 0, 0, 0] 转成 q_dot。
+   - 从 q_last_commanded 继续积分得到 q_des。
+   - 发布 /arm/arm_joint_controller/command。
+   - 支持四个模式：
+     z_probe：x/y 小幅保持，只验证 z 单轴导纳。
+     x_line：x 慢速直线往复，y 固定，z 继续单轴导纳。
+     x_bump：x 慢速直线往复，y 固定，z 导纳响应空间高斯凸起。
+     x_wave：x 长直线往复，y 固定，z 导纳响应平滑正弦曲面。
+
+5. sim_09_admittance_live_plot.py
+   - 订阅 /rm75_z_admittance_probe/state，并发布 /rm75_z_admittance_probe/tuning_command。
+   - 不直接发布关节命令；Start/Stop 和参数由 sim_09 控制节点在 30 Hz 周期边界应用。
+   - 实时画出 surface_z、eq_tcp_z、tcp_z、fz_virtual_N、desired_fz_N、vz_admittance、tcp_eq_err 等曲线。
+   - 主要用于后续调参：把“曲面高度变化 -> 虚拟接触力变化 -> z 导纳速度 -> TCP 高度误差”放在同一时间轴上看。
+   - 默认把每条约 30 Hz 状态消息持续写入 state.csv，关闭窗口或停止 roslaunch 时保存 plot.png。
+
+关键 topic：
+
+1. /arm/arm_joint_controller/command
+   - 类型：trajectory_msgs/JointTrajectory
+   - 最终控制输出。
+
+2. /arm/joint_states
+   - 类型：sensor_msgs/JointState
+   - Gazebo arm controller 的真实关节反馈。
+
+3. /tf
+   - robot_state_publisher 根据 joint_states 发布 base_link -> link7。
+   - sim_09 用 TF，而不是 MoveIt get_current_pose，作为闭环位姿来源。
+
+4. /rm75_z_admittance_probe/state
+   - 类型：std_msgs/String
+   - 包含 link_xyz、tcp_z、surface_blend、surface_z、penetration、fz_virtual_N、vz_admittance、joint_error_max 等诊断量。
+   - sim_09_admittance_live_plot.py 解析这个 topic 生成实时曲线。
+
+5. /rm75_z_admittance_probe/target_pose
+   - 类型：geometry_msgs/PoseStamped
+   - 用于观察下一步 link7 目标位置，不是闭环反馈来源。
+
+6. /rm75_z_admittance_probe/markers
+   - 类型：visualization_msgs/MarkerArray
+   - 用于 RViz 可视化 TCP、擦拭块、虚拟桌面、擦拭线、空间凸起。
+   - 这个 topic 不参与控制，只帮助看懂“机械臂到底在擦哪里”。
+
+7. /rm75_z_admittance_probe/tuning_command
+   - 类型：std_msgs/String，内容是 JSON。
+   - Start 示例：{"action":"start","normal_mass":1.5,"normal_damping":65.0,"desired_normal_force":6.0}
+   - Stop 示例：{"action":"stop"}
+   - ROS 回调只把最新命令写入线程安全邮箱，主控制循环再验证并应用。
+
+数据流/控制流程
+---------------
+当前最小闭环：
+
+/arm/joint_states
+  -> TF(base_link -> link7)
+  -> link7_z
+  -> tcp_z = link7_z - tool_offset_z
+  -> surface_z = base_surface_z + smooth_step(t)、single bump(x, y) 或 wave(x, y)
+  -> penetration = surface_z - tcp_z
+  -> fz_virtual = K_surface * penetration - D_surface * tcp_vz
+  -> z 单轴导纳 M * z_ddot + D * z_dot = fz_virtual - desired_fz
+  -> vz_admittance
+  -> x/y 小幅保持、x_line 慢速往复、x_bump 单凸起或 x_wave 凹凸曲面 + z 导纳速度
+  -> Jacobian DLS 计算 q_dot
+  -> q_des = q_last_commanded + q_dot * dt
+  -> /arm/arm_joint_controller/command
+
+关键公式或控制逻辑
+------------------
+虚拟 TCP：
+
+contact_z = link7_z - tool_offset_z
+
+默认 tool_offset_z = 0.040 m。
+这不是最终真实工具 TCP，只是当前学习阶段的虚拟接触点。
+
+虚拟桌面高度：
+
+surface_z = base_surface_z + surface_step(t)
+
+在 z_probe 和 x_line 模式中，如果 step_height > 0，surface_step 来自时间上的 smooth_step(t)，用于复现实验。
+
+默认 x_line 的 step_height = 0，因此 surface_step = 0，surface_source = fixed_surface。
+也就是说第一步固定直线擦拭只验证：末端沿桌面 x 方向慢速往复，z 方向维持固定虚拟桌面的法向力。
+
+在 x_bump 模式中，surface_step 来自空间高斯凸起：
+
+surface_step = bump_height * exp(-0.5 * ((x - bump_x) / sigma_x)^2 - 0.5 * ((y - bump_y) / sigma_y)^2)
+
+也就是说，只有当 TCP/link 运动到凸起附近时，虚拟桌面才会升高。
+
+在 x_wave 模式中，surface_step 来自一条正弦平方曲面：
+
+s = clamp((x - center_x) / line_length + 0.5, 0, 1)
+surface_blend = 0.5 * (1 - cos(pi * motion_elapsed / surface_blend_time))
+surface_step = surface_blend * wave_height * sin(pi * wave_cycles * s)^2 * y_gain
+
+surface_blend 在默认 2 s 内从 0 平滑增加到 1。
+这样 settle 结束时即使机械臂还没有完全到达擦拭线中心，虚拟曲面也不会瞬间跳高并产生力尖峰。
+
+默认参数：
+- wave_height = 0.014 m，凸起高度约 14 mm。
+- wave_cycles = 2.0，18 cm 线段上出现两个平滑凸峰。
+- wave_sigma_y = 0.060 m，控制离开擦拭线 y 方向后的衰减。
+
+这个曲面是连续的正弦函数，不是硬台阶，也不是一格一格的方块。
+Gazebo 里使用 smooth_wave_surface.dae 做可视网格；它不参与碰撞，只和 sim_09 里的数学曲面对齐。
+
+默认 base_surface_z 在 base_link 中为 0.336 m，对应 Gazebo world/dummy 坐标中的可视桌面高度 0.366 m。
+
+如果调试时只是想围绕当前 TCP 高度做 z_probe，可以加 --auto-surface-z，让脚本按初始 TCP 高度和期望法向力估计：
+
+base_surface_z = initial_tcp_z + desired_normal_force / surface_stiffness
+
+这样启动时的虚拟法向力接近期望力，但它会脱离低桌面视觉模型。
+
+虚拟压入量：
+
+penetration = surface_z - tcp_z
+
+penetration > 0 表示 TCP 在虚拟桌面以下，产生向上的虚拟法向力。
+
+虚拟法向力：
+
+fz_virtual = surface_stiffness * penetration - surface_damping * tcp_vz
+
+z 单轴导纳：
+
+M * z_ddot + D * z_dot = fz_virtual - desired_fz
+
+当前代码不再用显式欧拉直接执行 v_next = v + a * dt，而是在一个控制周期内把力误差视为常量，使用一阶精确离散：
+
+alpha = exp(-D * dt / M)
+v_steady = (fz_virtual - desired_fz) / D
+v_next = alpha * v + (1 - alpha) * v_steady
+
+当 D = 0 时才退回无阻尼积分。
+这项修改避免旧版在 30 Hz、M = 1.5、D = 115 时出现 D * dt / M 约等于 2.56 的正负速度数值振荡。
+
+符号解释：
+- fz_virtual > desired_fz：说明压得太重或虚拟桌面台阶升高，vz 变正，末端上抬。
+- fz_virtual < desired_fz：说明压得太轻或台阶撤走，vz 变负，末端下压。
+
+命令积分：
+
+Jacobian 计算点：
+q_current = /arm/joint_states 当前真实反馈
+
+命令积分点：
+q_des = q_last_commanded + q_dot * dt
+
+这里不能写成 q_current + q_dot * dt。
+原因是控制器有跟随滞后，如果每周期从当前反馈重新加一小步，目标会不断被拉回实际位置附近，连续速度命令积不起来。
+
+默认参数
+--------
+- 脚本 rosrun 默认 mode = x_line
+- 一键 launch 默认 mode = x_wave
+- 一键 launch 默认 duration = 90 s
+- 脚本默认 duration = 60 s
+- rate = 30 Hz
+- command_horizon = 0.10 s（当前 position JointTrajectoryController 的验证基线）
+- stamp_mode = future
+- lead_time = 0.03 s
+- startup_timeout = 45 s
+- settle_time = 4 s
+- log_period = 1 s
+- 脚本手动 rosrun 默认 prepare = false
+- 一键 launch 默认 prepare_arg = --prepare，先进入擦拭准备姿态
+- prepare_joints = [-0.000107, 0.185648, 0.109322, 1.316919, -0.076408, 0.927566, 0.599898]
+- tool_offset_z = 0.040 m
+- Gazebo/world 可视 surface_z = 0.366 m（dummy/world 坐标系）
+- sim_09/base_link 导纳 surface_z = 0.336 m（dummy -> base_link 固定 +0.030 m）
+- line_center_x = 0.410 m
+- line_center_y = 0.026 m
+- Gazebo 可视 table_center_x = 0.640 m
+- Gazebo 可视 table_size_x = 0.760 m
+- desired_normal_force = 6 N（一键 launch）
+- surface_stiffness = 1000 N/m（一键 launch）
+- surface_damping = 12 N/(m/s)（一键 launch）
+- 教学版期望压入量 = desired_normal_force / surface_stiffness = 0.006 m，比旧版 8/600 = 0.013 m 更接近可视曲面。
+- step_start = 6.0 s
+- step_duration = 12.0 s
+- step_height = 0.000 m
+- line_length = 0.180 m
+- line_speed = 0.004 m/s（一键 launch）
+- line_speed = 0.004 m/s（脚本默认）
+- max_xy_velocity = 0.012 m/s
+- max_initial_xy_error = 0.35 m
+- max_initial_z_gap = 0.12 m
+- bump_height = 0.010 m
+- bump_x_offset = -0.018 m
+- bump_sigma_x = 0.012 m
+- bump_sigma_y = 0.060 m
+- wave_height = 0.014 m
+- wave_cycles = 2.0
+- wave_sigma_y = 0.060 m
+- surface_blend_time = 2.0 s（一键 launch）
+- normal_mass = 1.5（一键 launch）
+- normal_damping = 65（一键 launch）
+- max_z_velocity = 0.014 m/s（一键 launch）
+- max_penetration = 0.030 m
+- max_lift = 0.050 m
+- jacobian_damping = 0.10（一键 launch）
+- max_joint_velocity = 0.08 rad/s（一键 launch）
+- max_joint_step = 0.004 rad/control-cycle（一键 launch）
+- min_safe_singular = 0.02
+- marker_lifetime = 2.0 s
+
+命令行操作
+----------
+方式 A：一键启动带桌子的 Gazebo + MoveIt + sim_09 固定直线擦拭
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch
+
+这条命令默认会给 sim_09 传入 --prepare。
+这条命令也默认传入 --start-paused：完成准备动作和 4 s settle 后，机械臂停在线中心，等待曲线窗口的 Apply & Start。
+这条命令也会默认启动实时曲线窗口 sim_09_admittance_live_plot.py，窗口显示最近 60 秒的高度、力、速度和误差曲线。
+实时曲线节点默认同时保存本轮完整 CSV 和曲线 PNG，输出根目录为：
+
+/home/ros/ws_rm_75_6f_robot/study/data/sim09_runs
+
+每次启动会创建独立目录，例如：
+
+sim09_20260710_120000_pid12345/
+  state.csv
+  plot.png
+
+state.csv 在实验运行期间持续写入，每约 30 条消息刷新一次磁盘。
+plot.png 在关闭图窗或停止 roslaunch 时保存，并把默认 90 s 实验的完整缓冲画到一张图中。
+这些运行数据已由 study/data/sim09_runs/.gitignore 忽略，不会混入 Git 代码提交。
+
+临时关闭自动保存：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_save_data:=false
+
+修改保存根目录：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_output_dir:=/tmp/sim09_runs
+
+如果需要恢复旧版“settle 后自动开始”的行为：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch start_mode_arg:=--auto-start
+
+如果只想跑 Gazebo/RViz 和控制，不开曲线窗口：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot:=false
+
+如果想不看 RViz，只看 Gazebo 和实时曲线：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch use_rviz:=false plot:=true
+
+如果想把曲线窗口时间轴放长到 120 秒：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch plot_window:=120
+
+这里的 prepare_joints 是专门为擦拭选的准备姿态：link7 局部 Z 轴主要朝向 base_link 的 -Z，也就是法兰/擦拭面朝向桌面。
+当前一键 launch 默认 mode=x_wave、line_length=0.180，也就是沿 18 cm 长直线擦过平滑正弦曲面。
+脚本启动时会打印：
+- Line start/end xy：擦拭线起点和终点。
+- Visual table x/y：Gazebo 可视桌面的 x/y 覆盖范围。
+- Line edge margin x/y：擦拭线到桌边的最近余量。
+
+当前默认值：
+- 18 cm 擦拭线 x 范围约 [0.320, 0.500] m。
+- 可视桌面 x 范围约 [0.260, 1.020] m。
+- x 方向离靠机器人侧桌边约 0.060 m，离远端桌边约 0.520 m。
+- 更重要的是，桌子靠机器人侧边缘现在位于 x≈0.260，比旧版 x≈0.150 更远离机械臂底座和下部连杆。
+- 可视桌面 y 范围约 [-0.194, 0.246] m，擦拭带 y 方向也有约 0.175 m 余量。
+所以当前 18 cm 版本不会碰到桌子边沿；如果以后继续加长，优先看 Line edge margin 是否低于 0.030 m。
+如果只想观察当前姿态，不执行预备动作，可以显式关闭：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch prepare_arg:=--no-prepare
+
+方式 B：分两个终端启动，便于先看 Gazebo/RViz 再启动控制
+
+终端 1：启动带桌子的 Gazebo + MoveIt
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_gazebo arm_75_bumpy_wiping_moveit.launch
+
+终端 2：运行默认慢速 x_line 固定直线擦拭
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py
+
+终端 2：回退到 z 单轴导纳最小验证
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode z_probe --duration 35
+
+如果你只想验证 z 方向柔顺，不关心 Gazebo 低桌面视觉，可以围绕当前 TCP 自动估计 surface_z：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode z_probe --duration 35 --auto-surface-z
+
+终端 2：运行 x 方向慢速直线擦拭 + z 单轴导纳
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_line --duration 45 --line-length 0.080 --line-speed 0.004 --step-height 0.0 --normal-damping 75 --max-z-velocity 0.018 --jacobian-damping 0.12 --max-joint-velocity 0.10 --max-joint-step 0.005
+
+终端 2：运行 x 方向慢速直线擦拭 + 空间凸起 + z 单轴导纳
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_bump --duration 60 --line-length 0.080 --line-speed 0.004 --bump-height 0.010 --bump-x-offset -0.018 --bump-sigma-x 0.012 --normal-damping 75 --max-z-velocity 0.018 --jacobian-damping 0.12 --max-joint-velocity 0.10 --max-joint-step 0.005
+
+终端 2：运行长直线擦拭 + 平滑正弦曲面 + z 单轴导纳
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --prepare --mode x_wave --duration 90 --line-length 0.180 --line-speed 0.004 --wave-height 0.014 --wave-cycles 2.0 --surface-blend-time 2.0 --desired-normal-force 6 --surface-stiffness 1000 --surface-damping 12 --normal-mass 1.5 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
+
+终端 3：单独打开实时曲线窗口
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_live_plot.py --window 60
+
+单独打开时也默认保存。关闭自动保存可以加 --save-data false；更改目录可以加 --output-dir /tmp/sim09_runs。
+
+如果图窗打不开，先确认当前终端有图形显示环境；如果缺 matplotlib：
+
+sudo apt install python3-matplotlib
+
+如果担心工作空间或桌边，先用保守线长跑一遍：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch line_length:=0.120 duration:=60
+
+使用已经启动的 RViz 看 TCP/擦拭块/虚拟桌面：
+
+注意：
+- arm_75_bumpy_wiping_moveit.launch 和 sim_09_bumpy_wiping_demo.launch 都会启动 RViz。
+- 不要再另开一个 rviz 进程，否则可能出现配置/显示冲突。
+- 直接在现有 RViz 窗口里添加显示项。
+- 如果用一键 launch，RViz 会自动打开；如果用分终端方式，终端 1 的 launch 也会自动打开 RViz。
+- RViz 不会显示 Gazebo world 里的真实桌子模型，这不影响控制。
+- 想在 RViz 看桌面，需要看 sim_09 发布的 MarkerArray 虚拟桌面。
+
+现有 RViz 设置：
+- Fixed Frame 设为 base_link。
+- 如果还没有 RobotModel，添加 RobotModel，观察机械臂。
+- 添加 MarkerArray，topic 选择 /rm75_z_admittance_probe/markers。
+- 绿色小球是虚拟 TCP/contact point。
+- 黄色半透明块是虚拟擦拭 pad。
+- 蓝色半透明平面是虚拟桌面高度。
+- 红色半透明圆柱是 x_bump 空间凸起。
+
+方式 C：先不加导纳，使用 RViz/MoveIt 桌面标定 + 纯 MoveL 直线
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_12_waypoint_table_line_calibration.launch
+
+这条命令会启动带桌子的 Gazebo + MoveIt + RViz，并把同一张桌子加入 MoveIt PlanningScene。
+默认 command=setup，不会让机械臂移动。
+
+然后再开一个终端，先让机械臂到示教器保存的起点 cazhuozi1：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command start
+
+到达起点后，只规划 cazhuozi1 -> cazhuozi2 的 x 方向直线：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command plan-line
+
+如果 Cartesian fraction 接近 1.0，再执行：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_12_waypoint_table_line_calibration.py --command execute-line
+
+sim_12 的详细说明：
+/home/ros/ws_rm_75_6f_robot/study/rm75_6f_waypoint_table_line_calibration_experiment.txt
+- 白色线是 x 方向擦拭路径。
+
+观察状态：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo /rm75_z_admittance_probe/state
+
+观察目标位姿：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /rm75_z_admittance_probe/target_pose
+
+判断这个桌面高度和角度范围是否适合：
+
+启动 sim_09 后先看终端开头几行：
+- Initial line xy err：初始 link7 到固定擦拭线中心的平面距离。越小越好，默认超过 0.35 m 会报警。
+- Initial TCP-surface：虚拟 TCP 到桌面高度的 z 差。绝对值越小越像已经贴近桌面，默认超过 0.12 m 会报警。
+- Initial min singular：初始 Jacobian 最小奇异值。建议大于 0.02；低于 0.02 说明接近奇异，先不要加大速度。
+- Initial down score：link7 局部 Z 轴朝下程度。接近 1 表示擦拭面朝桌面；如果小于 0.5，说明更像朝侧面或朝天。
+
+运行过程中重点看：
+- min_singular 不要长期低于 0.02。
+- joint_error_max 不要一直累积变大。
+- xy_error 应该逐渐下降或保持小范围，不应该越擦越远。
+- RESULT 里的 x_span 应大于 min_x_motion，默认 0.025 m。
+- 默认 x_line 不要求 tcp_z_span 很大，因为它是在固定桌面上保持法向力；只有加 --step-height 或切到 x_bump 时，才重点看明显 z 起伏。
+
+因此，截图里“能不能擦”不能只看够不够得到，还要看上面这些数值。
+如果 Initial down score 为正且较大，Initial min singular 和运行中的 min_singular 都比较健康，joint_error_max 也不持续变大，这个桌面高度、姿态和关节角度范围就可以先继续做固定直线擦拭。
+
+更明显的 z 运动：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode z_probe --step-height 0.020 --desired-normal-force 10 --max-z-velocity 0.040
+
+更稳、更慢：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --line-speed 0.003 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08
+
+x_line 更稳、更慢：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_line --duration 60 --line-length 0.050 --line-speed 0.003 --step-height 0.0 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
+
+x_bump 更稳、更慢：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --mode x_bump --duration 75 --line-length 0.050 --line-speed 0.003 --bump-height 0.008 --bump-x-offset -0.016 --bump-sigma-x 0.014 --surface-blend-time 2.0 --normal-damping 65 --max-z-velocity 0.014 --jacobian-damping 0.10 --max-joint-velocity 0.08 --max-joint-step 0.004
+
+显式不执行预备姿态，直接围绕当前姿态验证：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_09_admittance_table_wiping.py --no-prepare
+
+观察现象
+--------
+成功时应该看到：
+
+z_probe 模式：
+
+1. 默认不执行预备姿态，直接从当前 Gazebo 姿态开始；如果加 --prepare，才会先移动到 prepare_joints。
+2. 默认 surface_z 固定在当前标定工作桌面 0.366 m；如果加 --auto-surface-z，才会按当前 TCP 自动估计。
+3. settle_time 结束后，surface_step 按 step_start 延迟再平滑升高。
+4. fz_virtual_N 变大。
+5. vz_admittance 变为正值，tcp_z 上升。
+6. 虚拟台阶撤走后，fz_virtual_N 变小，vz_admittance 变为负值，tcp_z 回落。
+7. joint_error_max 不应一直累积变大。
+8. 结束时打印 RESULT：
+   - tcp_z_span 应大于 min_tcp_motion，默认 0.004 m；
+   - max_joint_error 不应很大。
+
+x_line 模式：
+
+1. 一键 launch 默认先执行 --prepare，到擦拭准备位。
+2. 准备位下 link7 局部 Z 轴应主要朝下，终端 Initial down score 应明显大于 0.5。
+3. x_ref 会在固定工作桌面擦拭线中心附近短距离慢速往复。
+4. link_xyz.x 应跟随 x_ref 变化。
+5. y 方向基本保持在 line_center_y 附近。
+6. 默认 surface_step = 0，surface_source = fixed_surface，z 导纳负责维持固定桌面法向力。
+7. 如果显式加 --step-height，才会额外出现 z 上抬/回落扰动。
+8. RESULT 中：
+   - x_span 应大于 min_x_motion，默认 0.025 m；
+   - 默认固定桌面不强制要求 tcp_z_span 很大；
+   - max_xy_error 不应持续扩大；
+   - joint_error_max 不应一直累积变大；
+   - min_singular 建议不要低于 0.02。
+
+x_bump 模式：
+
+1. 默认有 4 秒 settle_time，方便先看清 Gazebo/RViz 里的桌面和机械臂。
+2. x_ref 慢速往复，link_xyz.x 跟随。
+3. 当 link_xyz.x 接近 bump_center.x 时，surface_step 变大。
+4. fz_virtual_N 变大。
+5. vz_admittance 变正，tcp_z 上升。
+6. 离开凸起后 surface_step 变小，z 导纳回落。
+7. RESULT 中：
+   - x_span 应大于 min_x_motion；
+   - tcp_z_span 应大于 min_tcp_motion；
+   - surface_step_span 应接近 bump_height 的一部分；
+   - joint_error_max 不应一直累积变大。
+
+Gazebo 里应该看到：
+- 深色桌面在机械臂前方偏侧位置，顶面大约贴近虚拟 TCP 高度。
+- 蓝色擦拭线在桌面上。
+- 橙红色小凸起在擦拭线上，位置对应 sim_09 的默认 bump_center。
+- 机械臂本体运动来自 /arm/arm_joint_controller/command。
+- RViz MarkerArray 里的黄色擦拭块、绿色 TCP 和蓝色虚拟桌面应与 Gazebo 桌面大致重合。
+
+重点看这些量
+------------
+- tcp_z：
+  虚拟接触点高度。
+
+- xy_ref：
+  x_line 模式下的 x/y 参考点。
+
+- link_xyz：
+  TF 读到的真实 link7 位置。
+
+- base_surface_z：
+  虚拟桌面基准高度。默认是当前标定工作桌面 0.366 m；加 --auto-surface-z 时才按当前 TCP 自动估计。
+
+- link7_z_axis / tool_down_score：
+  link7 局部 Z 轴在 base_link 下的方向，以及朝下评分。
+  tool_down_score = -link7_z_axis.z。
+  越接近 1，说明法兰/擦拭面越朝向桌面；接近 -1 则说明更像朝天。
+
+- surface_step：
+  默认 x_line 下是 0；z_probe 或显式 --step-height 时是时间台阶高度；x_bump 模式下是空间凸起高度；x_wave 模式下是正弦曲面高度。
+
+- surface_source：
+  temporal_step、spatial_bump 或 spatial_wave。
+
+- bump_center：
+  x_bump 模式下的空间凸起中心。
+
+- markers：
+  RViz 里的可视化对象，帮助确认 TCP 是否贴近虚拟桌面、是否沿擦拭线运动。
+
+- surface_z：
+  当前虚拟桌面高度。
+
+- eq_tcp_z：
+  当前期望 TCP 高度。
+  eq_tcp_z = surface_z - desired_normal_force / surface_stiffness。
+  例如新版教学参数 6N / 1000N/m = 0.006m，表示希望虚拟 TCP 比虚拟表面低约 6mm，以产生 6N 法向力。
+
+- tcp_eq_err：
+  TCP 相对期望接触轨迹的误差。
+  tcp_eq_err 接近 0：说明虚拟 TCP 正在贴着期望接触轨迹走。
+  tcp_eq_err 明显为正：说明 TCP 高于期望轨迹，视觉上可能像浮空。
+  tcp_eq_err 明显为负：说明 TCP 压入过多。
+
+- penetration：
+  虚拟压入量。
+
+- fz_virtual_N：
+  虚拟法向力。
+
+- vz_admittance：
+  z 导纳输出速度。
+
+- tcp_limit：
+  是否触发 min_tcp_z 或 max_tcp_z 限幅。
+
+- qdot_max：
+  最大关节速度。
+
+- min_singular：
+  Jacobian 最小奇异值。
+
+- joint_error_max：
+  关节目标和真实反馈的最大误差。
+
+- x_span：
+  结束时统计的 link7 x 方向实际运动范围。
+
+- surface_step_span：
+  结束时统计的虚拟桌面高度变化范围。
+
+- max_xy_error：
+  x/y 参考点和 link7 实际 x/y 的最大平面误差。
+
+实时曲线图怎么读
+----------------
+脚本：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot/rm_75_demo/scripts/sim_09_admittance_live_plot.py
+
+它订阅状态并发布调参命令，但不直接发布关节控制命令。
+一键 launch 默认 plot=true，会自动打开实时曲线窗口。
+sim_09 控制循环和状态发布默认约 30 Hz；曲线窗口默认每 200 ms 刷新一次，也就是约 5 Hz。
+绘图节点不会只保留 5 Hz 数据：每条约 30 Hz 的状态消息都会进入缓冲，5 Hz 只是屏幕重绘频率。
+窗口底部的 rx 显示实际接收频率，refresh 显示屏幕刷新频率，resets 显示检测到的 Gazebo/控制节点时间重置次数。
+blend 显示空间曲面渐入系数：settle 阶段为 0，默认再用 2 s 平滑增加到 1。
+
+交互式调参控制条
+------------------
+曲线窗口底部有三个键盘输入框：
+
+- M (kg)：normal_mass，允许范围 0.3 到 5.0。
+- D (N s/m)：normal_damping，允许范围 10 到 120。
+- Fd (N)：desired_normal_force，允许范围 1 到 15。
+
+点击白色输入框后用键盘输入数字。非数字、NaN、Inf 或超范围数值不会发送，按钮右侧会显示红色 invalid input。
+
+按钮语义：
+
+1. Apply & Start
+   - 一次性读取并发送三个输入框当前值。
+   - 控制节点在下一个 30 Hz 周期应用参数。
+   - run_id 加 1，run_elapsed 从 0 重新计时。
+   - 第一次 Start 从擦拭线中心开始；Stop 后再次 Start 从暂停位置继续，不让 x_ref 跳回中心。
+
+2. Stop
+   - 冻结 vx、vy、vz 为 0，关节位置控制器保持当前姿态。
+   - motion_elapsed 冻结，因此曲面相位和 x 参考位置也冻结。
+   - 关闭曲线窗口前也会自动发送一次 Stop。
+
+窗口中的 controller 状态行显示当前已经生效的 run_state、run_id、M、D、Fd 和 run_elapsed。
+输入框中的值只有点击 Apply & Start 后才生效，只编辑文本不会改变控制器。
+交互模式把 duration=90 解释为“单个 run_id 的最长运行时间”：到 90 s 自动 Stop，但节点和图窗继续等待下一组参数。
+当前 18 cm、0.004 m/s 的往复轨迹周期约为 90 s，因此每个完整 run_id 会覆盖一整周期，便于公平比较参数。
+也可以提前按 Stop；全部实验完成后按 Ctrl+C 结束并保存 CSV/PNG。
+
+自动保存的数据怎么读
+--------------------
+每次运行目录里有两个文件：
+
+1. state.csv
+   - 每条 /rm75_z_admittance_probe/state 消息保存一行，采样频率通常约 30 Hz。
+   - wall_time、ros_time、elapsed 用于对齐真实时间、ROS 仿真时间和本轮实验时间。
+   - mode、run_state、run_id、run_elapsed、surface_source、tcp_limit、reset_index 用于判断控制状态、调参分段和 Gazebo Reset。
+   - normal_mass、normal_damping、desired_fz_N、surface_stiffness、surface_damping 是后续参数对比的核心列。
+   - surface_z、eq_tcp_z、tcp_z、fz_virtual_N、force_error_N、vz_admittance、tcp_eq_err、xy_error 是后续定量指标的输入。
+   - xy_ref、link_xyz、link7_z_axis、cartesian_velocity 已展开为独立数值列，便于直接用 Python、LibreOffice 或 pandas 分析。
+   - raw_state 保留原始 ROS 字符串，方便未来字段解析规则改变后复核。
+
+2. plot.png
+   - 保存关闭窗口时的四组曲线。
+   - 默认 max_samples=6000，在 30 Hz 下约能覆盖 200 s；当前 90 s 实验可以完整保存。
+
+查看最近一次运行目录：
+
+cd /home/ros/ws_rm_75_6f_robot && ls -dt study/data/sim09_runs/sim09_* | head -1
+
+检查所有 CSV/PNG 是否生成：
+
+cd /home/ros/ws_rm_75_6f_robot && find study/data/sim09_runs -maxdepth 2 -type f
+
+正常关闭图窗或按 Ctrl+C 停止 roslaunch 时，会同时得到 CSV 和 PNG。
+如果进程被 kill -9 或系统异常退出，PNG 可能来不及保存；CSV 每秒刷新一次，因此通常只损失最后不到一秒的数据。
+
+无界面批量记录与自动统计
+------------------------
+控制变量实验可以关闭 Gazebo/RViz 窗口，但 Gazebo 物理和控制节点仍会运行：
+
+cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch gui:=false use_rviz:=false plot_backend:=Agg plot_max_samples:=40000 duration:=90
+
+Agg 模式不会创建参数输入框；它只在后台按约 30 Hz 保存 CSV，并在 roslaunch 退出时生成完整 PNG。参数命令仍通过 tuning_command topic 发送。
+
+分析某次实验：
+
+cd /home/ros/ws_rm_75_6f_robot && python3 src/rm_75_robot/rm_75_demo/scripts/sim_09_tuning_analyze.py --plot study/data/sim09_runs/sim09_时间戳_pid进程号/state.csv
+
+分析器按 run_id 分组，并生成同目录 summary.csv；只有选中至少两个 run 时，--plot 才会生成 comparison.png。单 run 只应查看 plot.png 的时域响应，不应生成没有对照对象的“comparison”。对于 M/D/Fd 控制变量实验，comparison.png 会按 M、D、Fd 三列分别画数值扫描折线，四行依次比较力 RMS、稳态力峰值、eq_err RMS、Z 速度饱和率；相同基线的重复 run 用均值和最小/最大范围误差棒显示。它先检查缺失值、重复时刻、时间倒退、单轮参数是否意外改变，以及实际采样率是否在 25~35 Hz。启动后的前 5 s 作为调参瞬态；稳态力误差 RMS、峰值、偏差和 z/xy 跟踪指标从 5 s 后计算，同时 force_peak_all_N 保留全过程峰值。
+
+当前仿真学习验收线：力均值偏差不超过 Fd 的 5%，力误差 RMS 不超过 10%，稳态峰值不超过 25%；eq_err RMS/峰值不超过 1/2 mm；z 速度饱和率不超过 1%；xy RMS/峰值不超过 5/10 mm；min_singular 不低于 0.02；joint_error_max 不超过 0.01 rad；稳态不失去虚拟接触。这些阈值用于同一曲面和速度下比较参数，不是实物安全标准。
+
+鲁棒性实验的周期换算
+--------------------
+改变 line_speed 时，不能继续固定 duration=90，否则各组覆盖的轨迹距离不同。当前三角往复轨迹走完“中心 -> 右端 -> 中心 -> 左端 -> 中心”的总路程是 2 * line_length，因此：
+
+duration = 2 * line_length / line_speed
+
+line_length=0.180 m 时，3/4/5/6 mm/s 分别使用 120/90/72/60 s。2026-07-10 的完整鲁棒性结果见：
+
+study/rm75_sim09_robustness_20260710.txt
+
+端点平滑换向与 XY 误差拆分（2026-07-11）
+------------------------------------------
+旧版 x 参考是三角波：位置连续，但在端点把参考速度从 +line_speed 瞬间变成 -line_speed。当前代码改为余弦速度混合：在每个端点附近，参考速度从 +V 经 0 平滑变到 -V，位置、速度和加速度连续；中段仍以 line_speed 匀速擦拭。
+
+--line-turn-time 控制一次端点速度混合的时长，默认 0.5 s。转向距离为 d=V*T/pi；在 V=4 mm/s 时 d 约 0.64 mm。完整周期更新为：
+
+period = 2*line_length/line_speed + 2*line_turn_time*(1 - 2/pi)
+
+因此默认 180 mm、4 mm/s、0.5 s 时 period 约为 90.36 s，一键 launch 默认 duration 已设为 91 s。
+
+状态和实时图现在新增：
+- x_error=x_ref-x_actual：沿擦拭线方向的跟踪误差。
+- y_error=y_ref-y_actual：横向偏离直线的误差。
+- xy_error=sqrt(x_error^2+y_error^2)：原有合成平面误差。
+- xy_ref_vx：参考轨迹 x 速度，用于观察端点是否平滑减速、反向。
+
+不要把 xy_error 直接称作“擦偏了直线”。只有 y_error 才直接表示横向擦偏；x_error 大通常表示沿线滞后或超前。
+
+图框 1：Surface/TCP height
+- surface_z：当前虚拟桌面/曲面高度。
+- eq_tcp_z：为了产生期望法向力，TCP 应该到达的平衡高度。
+- tcp_z：TF 反馈出来的虚拟 TCP 实际高度。
+- 如果 surface_z 起伏明显，但 tcp_z 不跟，先看图框 3 的 vz 是否被限幅，再看图框 4 的 tcp_eq_err。
+- 如果 tcp_z 基本贴着 eq_tcp_z，说明虚拟接触点在数据上没有悬空；Gazebo 里看到的悬空多半是可视法兰和虚拟 TCP 偏置不一致。
+
+图框 2：Normal force
+- fz_virtual_N：虚拟法向力。
+- desired_fz_N：期望法向力。
+- force_error_N = fz_virtual_N - desired_fz_N。
+- 如果 fz_virtual_N 经常贴近 0，说明虚拟 TCP 确实离开了虚拟表面或压入不足。
+- 如果 fz_virtual_N 大幅超过 desired_fz_N，并且 tcp_eq_err 为负，说明压入过深。先检查 vz 是否饱和，再降低 wave_height 或 line_speed，最后小幅调整 normal_damping。
+
+图框 3：Z velocity command
+- vz_raw：z 导纳原始速度。
+- vz_admittance：经过 TCP 高度安全限幅后的最终 z 速度命令。
+- 如果 vz_raw 经常比 vz_admittance 大，说明 min_tcp_z/max_tcp_z 限幅在工作。
+- 如果 vz_admittance 长时间顶在 max_z_velocity 附近，说明曲面变化相对当前 z 响应太快，可以降低 line_speed、降低 wave_height，或适当提高 max_z_velocity。
+- 旧版 D=115 配合显式欧拉时，速度线在正负限幅之间形成厚色带。当前精确离散 + D=65 后，正常目标是速度曲线围绕 0 连续变化，不再长期贴住正负限幅。
+
+图框 4：Contact/tracking error
+- tcp_eq_err：TCP 相对期望接触轨迹的 z 误差，越接近 0 越贴合。
+- penetration：虚拟压入量，稳定时应接近 desired_normal_force / surface_stiffness。
+- xy_error：x/y 平面参考和实际 link7 的误差。
+- 如果 tcp_eq_err 小但 xy_error 大，说明 z 柔顺本身没问题，主要是 x/y 跟踪问题。
+- 当前往复轨迹已经改为从擦拭线中心连续起步，不再在 settle 结束后直接把 x_ref 切到线段端点。
+- 如果 xy_error 仍在 settle 结束后突然变大，检查 line_speed、max_xy_velocity 和 xy_hold_gain，而不是先调 z 导纳参数。
+
+后续调参时的优先顺序：
+1. 先保证图框 1 里 tcp_z 能跟随 eq_tcp_z，不要只看 Gazebo 法兰外观。
+2. 再看图框 2 的 fz_virtual_N 是否围绕 desired_fz_N，不要长期贴 0 或长期过大。
+3. 再看图框 3 的 vz 是否频繁撞限幅。
+4. 最后看图框 4 的 xy_error，判断 x/y 跟踪速度和保持增益是否合适。
+
+绘图节点自身排错：
+- 如果 backend=TkAgg 或 Qt5Agg，这是正常图形后端，不应再出现“无 GUI 后端”的误报警。
+- 如果 backend=Agg，说明当前终端没有可用图形后端；检查 DISPLAY，或手动传 --backend TkAgg。
+- Gazebo Reset 或 sim_09 控制节点重启后 elapsed 会回到 0。绘图节点会自动清空上一轮缓冲，resets 加 1，避免新旧时间轴混在一起。
+
+排错 checklist
+--------------
+1. TF 读取失败
+   - 检查 TF：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun tf tf_echo base_link link7
+   - 检查 /arm/joint_states：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /arm/joint_states
+
+2. 机械臂不动
+   - 先看启动终端有没有 sim_09 自己的日志：
+     sim_09 starting
+     sim_09 waiting for command topic subscriber
+     sim_09 connecting to MoveIt group
+     sim_09 moving to prepare joints before wiping
+   - 如果只有 move_group 的日志，没有 sim_09 日志，说明控制节点没有真正启动或日志被挡住。
+   - 如果看到 argparse 报错：
+     unrecognized arguments: __name:=... __log:=...
+     说明 Python 脚本没有过滤 roslaunch 自动追加的 ROS remap 参数。
+     sim_09 已用 rospy.myargv(argv=sys.argv) 过滤这些参数，后续不应再出现这个错误。
+   - 检查 sim_09 节点：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosnode list | grep sim_09
+   - 检查控制命令 topic 是否有发布：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic hz /arm/arm_joint_controller/command
+   - 一键 launch 默认会执行擦拭准备位 --prepare；如果 10-20 秒内完全没有预备动作，先不要看擦拭线，优先查 sim_09 是否启动。
+   - 先复核 sim_10：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_10_joint_command_sanity.py
+   - 再复核 sim_08：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py --duration 8 --demo-force-duration 3 --demo-force-x 3 --max-velocity 0.015 0.010 0.010
+
+3. tcp_z 几乎不变化
+   - 增大虚拟台阶：
+     --step-height 0.020
+   - 降低 z 阻尼：
+     --normal-damping 35
+   - 提高 z 最大速度：
+     --max-z-velocity 0.050
+
+4. z 方向抖动
+   - 先确认当前代码已经使用一阶精确离散；旧版显式欧拉配大阻尼会产生数值振荡。
+   - 检查实时图中 vz 是否长期贴着正负 max_z_velocity，正常曲线不应形成厚色带。
+   - 降低曲面高度或移动速度：
+     --wave-height 0.010 --line-speed 0.003
+   - 保持一键 launch 的初始调参基线：
+     --normal-mass 1.5 --normal-damping 65 --surface-blend-time 2.0
+   - 不要把“继续增大 normal_damping”作为高频抖动的第一反应；先看速度限幅和离散算法。
+
+5. joint_error_max 变大并持续累积
+   - 降低关节速度：
+     --max-joint-velocity 0.16
+   - 降低每周期关节步长：
+     --max-joint-step 0.008
+   - 不要直接增大 command_horizon。当前 30 Hz position controller 的验证基线是
+     --command-horizon 0.10；若需要修改，应固定其他参数在 0.08/0.10/0.12 s
+     范围内复验 joint_error_max 和 xy_error，而不是仅凭直觉拉长执行时间。
+
+6. x_line 模式 x 跟随不明显
+   - 增大线长：
+     --line-length 0.080
+   - 增大线速度，但先不要太大：
+     --line-speed 0.012
+   - 端点换向使用 line_turn_time 的余弦减速/加速，不再用速度瞬时反向。
+   - 在 H=14 mm、V=6 mm/s 的仿真验证中，max_xy_velocity=0.018 通过 XY 指标；
+     先检查 min_singular 和 qdot_max，再决定是否继续提高。
+   - 详见：study/rm75_sim09_xy_smooth_turn_20260711.txt
+
+7. x_bump 模式没有明显碰到凸起
+   - 检查 RESULT 里的 surface_step_span。
+   - 如果 surface_step_span 太小，说明轨迹没有经过凸起中心附近。
+   - 可以把凸起放近一些：
+     --bump-x-offset -0.010
+   - 或增大凸起宽度：
+     --bump-sigma-x 0.018
+
+8. RViz 看不到擦拭块/桌面 marker
+   - 不要重复启动 rviz；使用 arm_75_bumpy_wiping_moveit.launch 或 sim_09_bumpy_wiping_demo.launch 已经打开的 RViz 窗口。
+   - Fixed Frame 检查为 base_link。
+   - MarkerArray topic 检查为：
+     /rm75_z_admittance_probe/markers
+   - 确认 sim_09 没有加 --no-markers。
+   - 如果下拉列表没有这个 topic，先确认 sim_09 正在运行；MarkerArray 只有脚本运行时才发布。
+   - 检查 topic 是否有数据：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && rostopic echo -n1 /rm75_z_admittance_probe/markers
+
+9. Gazebo 里看不到桌子
+   - 检查启动文件是否用错。普通 arm_75_bringup_moveit.launch 默认是空世界。
+   - 正确启动带桌子的世界：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_gazebo arm_75_bumpy_wiping_moveit.launch
+   - 或者直接用一键演示：
+     cd /home/ros/ws_rm_75_6f_robot && source devel/setup.bash && roslaunch rm_75_demo sim_09_bumpy_wiping_demo.launch
+
+安全与限幅
+----------
+- 这是 Gazebo 学习脚本，不要直接用于实物。
+- 当前 Gazebo 桌面是可视化模型；z 方向反馈仍是虚拟力，不是真实接触力。
+- sim_09 本身仍不依赖 MoveIt PlanningScene 做闭环避障；它是 Jacobian 速度外环实验。
+- 需要 RViz/MoveIt 桌面碰撞物和示教点直线验证时，先使用 sim_12。
+- 当前默认 prepare_joints 和桌面高度已配套调整，尽量让预备位从桌面上方进入擦拭姿态；如果仍出现视觉穿桌，应回到示教器重新保存更安全的 cazhuozi1/cazhuozi2，再用 sim_12 复核。
+- max_z_velocity 限制 z 方向导纳速度。
+- max_joint_velocity 限制 q_dot。
+- max_joint_step 限制每周期 q_des 变化。
+- min_tcp_z / max_tcp_z 由 base_surface_z、max_penetration、max_lift 自动生成。
+- 如果未来迁移到实物，必须先小力、小速度、小范围，并有急停。
+
+下一步
+------
+- 现在先用 sim_12 验证：RViz/MoveIt 桌面、示教点起点、纯 Cartesian MoveL 直线。
+- 如果 sim_12 直线运动稳定，再把标定出的桌面高度、起点区域、工具朝向要求接回 sim_09。
+- 如果视觉和控制已经对齐，下一步搭建 Gazebo 接触/力反馈模块：
+  1. 在 TCP/擦拭 pad 上增加碰撞几何。
+  2. 给 pad 或关节末端加 Gazebo contact sensor 或 force/torque sensor 插件。
+  3. 新建一个只读传感器验证脚本，先不闭环控制，只打印真实 fz。
+  4. 再把 sim_09 的 virtual_contact_force() 替换为传感器 fz 输入。
+- 最后才迁移到真实 RM75-6F 六维力传感器，并且必须小力、小速度、小范围验证。

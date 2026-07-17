@@ -1,0 +1,89 @@
+<launch>
+  <!--
+    One-command visual demo for sim_09.
+    It starts the RM75-6F Gazebo + MoveIt scene with a visible table, then runs
+    the long x_wave wiping controller. sim_09 has long startup waits, so it can
+    be launched together with Gazebo instead of from a second terminal.
+  -->
+  <arg name="mode" default="x_wave"/>
+  <arg name="duration" default="91.0"/>
+  <arg name="startup_timeout" default="60.0"/>
+  <arg name="settle_time" default="4.0"/>
+  <!--
+    The default prepare joints are a wiping-ready posture with the link7/flange
+    local Z axis facing mostly downward. If the visual table placement is being
+    tuned, set prepare_arg to no-prepare for pure observation.
+  -->
+  <arg name="prepare_arg" default="--prepare"/>
+  <arg name="start_mode_arg" default="--start-paused"/>
+  <arg name="tuning_topic" default="/rm75_z_admittance_probe/tuning_command"/>
+  <arg name="surface_z" default="0.336"/>
+  <arg name="line_center_x" default="0.410"/>
+  <arg name="line_center_y" default="0.026"/>
+  <arg name="line_length" default="0.180"/>
+  <arg name="line_speed" default="0.004"/>
+  <arg name="line_turn_time" default="0.5"/>
+  <arg name="step_height" default="0.0"/>
+  <arg name="wave_height" default="0.014"/>
+  <arg name="wave_cycles" default="2.0"/>
+  <arg name="wave_dip_ratio" default="0.65"/>
+  <arg name="wave_spacing" default="0.055"/>
+  <arg name="wave_sigma_x" default="0.020"/>
+  <arg name="wave_sigma_y" default="0.060"/>
+  <arg name="surface_blend_time" default="2.0"/>
+  <arg name="desired_normal_force" default="6.0"/>
+  <arg name="surface_stiffness" default="1000.0"/>
+  <arg name="surface_damping" default="12.0"/>
+  <arg name="normal_mass" default="1.5"/>
+  <arg name="normal_damping" default="65.0"/>
+  <!-- Short rolling JointTrajectory timing. Keep these explicit for tracking experiments. -->
+  <arg name="control_rate" default="30.0"/>
+  <arg name="command_horizon" default="0.10"/>
+  <arg name="lead_time" default="0.03"/>
+  <arg name="stamp_mode" default="future"/>
+  <arg name="max_z_velocity" default="0.014"/>
+  <!-- Tangential tracker limit; raise only after checking X tracking at the target wiping speed. -->
+  <arg name="max_xy_velocity" default="0.018"/>
+  <arg name="jacobian_damping" default="0.10"/>
+  <arg name="max_joint_velocity" default="0.08"/>
+  <arg name="max_joint_step" default="0.004"/>
+  <arg name="marker_lifetime" default="2.0"/>
+  <arg name="paused" default="false"/>
+  <arg name="gui" default="true"/>
+  <arg name="headless" default="false"/>
+  <arg name="use_rviz" default="true"/>
+  <arg name="rviz_software_rendering" default="true"/>
+  <arg name="gazebo_software_rendering" default="false"/>
+  <arg name="plot" default="true"/>
+  <arg name="plot_window" default="60.0"/>
+  <arg name="plot_refresh_ms" default="200"/>
+  <arg name="plot_max_samples" default="6000"/>
+  <arg name="plot_backend" default="TkAgg"/>
+  <arg name="plot_save_data" default="true"/>
+  <arg name="plot_output_dir" default="$(env HOME)/ws_rm_75_6f_robot/study/data/sim09_runs"/>
+
+  <include file="$(find rm_75_gazebo)/launch/arm_75_bumpy_wiping_moveit.launch">
+    <arg name="paused" value="$(arg paused)" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="use_rviz" value="$(arg use_rviz)" />
+    <arg name="rviz_software_rendering" value="$(arg rviz_software_rendering)" />
+    <arg name="gazebo_software_rendering" value="$(arg gazebo_software_rendering)" />
+  </include>
+
+  <node
+    pkg="rm_75_demo"
+    type="sim_09_admittance_table_wiping.py"
+    name="sim_09_admittance_table_wiping"
+    output="screen"
+    required="true"
+    args="$(arg prepare_arg) $(arg start_mode_arg) --mode $(arg mode) --duration $(arg duration) --rate $(arg control_rate) --command-horizon $(arg command_horizon) --lead-time $(arg lead_time) --stamp-mode $(arg stamp_mode) --startup-timeout $(arg startup_timeout) --settle-time $(arg settle_time) --surface-z $(arg surface_z) --line-center-x $(arg line_center_x) --line-center-y $(arg line_center_y) --line-length $(arg line_length) --line-speed $(arg line_speed) --line-turn-time $(arg line_turn_time) --step-height $(arg step_height) --wave-height $(arg wave_height) --wave-cycles $(arg wave_cycles) --wave-dip-ratio $(arg wave_dip_ratio) --wave-spacing $(arg wave_spacing) --wave-sigma-x $(arg wave_sigma_x) --wave-sigma-y $(arg wave_sigma_y) --surface-blend-time $(arg surface_blend_time) --desired-normal-force $(arg desired_normal_force) --surface-stiffness $(arg surface_stiffness) --surface-damping $(arg surface_damping) --normal-mass $(arg normal_mass) --normal-damping $(arg normal_damping) --max-z-velocity $(arg max_z_velocity) --max-xy-velocity $(arg max_xy_velocity) --jacobian-damping $(arg jacobian_damping) --max-joint-velocity $(arg max_joint_velocity) --max-joint-step $(arg max_joint_step) --marker-lifetime $(arg marker_lifetime) --tuning-command-topic $(arg tuning_topic)" />
+
+  <node
+    if="$(arg plot)"
+    pkg="rm_75_demo"
+    type="sim_09_admittance_live_plot.py"
+    name="sim_09_admittance_live_plot"
+    output="screen"
+    args="--window $(arg plot_window) --refresh-ms $(arg plot_refresh_ms) --max-samples $(arg plot_max_samples) --backend $(arg plot_backend) --save-data $(arg plot_save_data) --output-dir $(arg plot_output_dir) --tuning-topic $(arg tuning_topic) --initial-normal-mass $(arg normal_mass) --initial-normal-damping $(arg normal_damping) --initial-desired-force $(arg desired_normal_force)" />
+</launch>

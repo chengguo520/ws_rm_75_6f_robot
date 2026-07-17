@@ -1,0 +1,722 @@
+RM75-6F 从 0 开始学习、仿真、实物连接与柔顺调试完整流程
+==========================================================
+
+写作目的
+--------
+这份笔记把当前仓库中已经做过的 RM75-6F 学习内容串成一条完整路线：
+
+1. 从官方资料开始认识机械臂。
+2. 搭建和理解 ROS 工作区。
+3. 在 RViz / MoveIt / Gazebo 中让机械臂先动起来。
+4. 连接实物 RM75-6F。
+5. 用 RViz / MoveIt 控制真实机械臂小幅运动。
+6. 进入仿真柔顺控制学习。
+7. 进入实物六维力、拖动示教、力位混合控制学习。
+
+这不是单一实验记录，而是给以后从 0 复现整个项目的人看的总路线图。
+
+当前仓库
+--------
+工作区：
+/home/ros/ws_rm_75_6f_robot
+
+当前实物柔顺分支：
+feature/real-force-compliance
+
+GitHub 远程：
+https://github.com/chengguo520/ws_rm_75_6f_robot.git
+
+关键代码根目录：
+/home/ros/ws_rm_75_6f_robot/src/rm_75_robot
+
+学习笔记目录：
+/home/ros/ws_rm_75_6f_robot/study
+
+官方最小资料归档：
+/home/ros/ws_rm_75_6f_robot/official
+
+
+一、官方资料怎么学
+==================
+
+原始官方资料目录：
+/home/ros/机械臂
+
+本仓库已归档的最小官方资料：
+
+1. RM75 用户手册
+   仓库路径：
+   official/docs/realman_rm75_user_manual_v3_3.pdf
+
+   原始路径：
+   /home/ros/机械臂/RM-75系列机械臂/（1）用户手册/睿尔曼RM75系列机器人用户手册V3.3.pdf
+
+   学习重点：
+   - 机械臂安全注意事项
+   - 上电、急停、示教器
+   - 网络连接和 IP
+   - 坐标系、工具、基础运动
+
+2. C++ API 说明
+   仓库路径：
+   official/docs/realman_robot_cpp_api_v4_0_2.pdf
+
+   原始路径：
+   /home/ros/机械臂/睿尔曼机械臂接口函数说明(c++)V4.0.2.pdf
+
+   学习重点：
+   - RM_API_Init
+   - Arm_Socket_Start
+   - MoveJ / MoveL / MoveC
+   - Get_Current_Arm_State
+   - Get_Force_Data
+   - Clear_Force_Data
+   - Start_Drag_Teach
+   - Start_Multi_Drag_Teach
+   - Set_Force_Postion
+   - Force_Position_Move_POSE / Joint
+
+3. 厂家 Linux C++ SDK 示例
+   仓库路径：
+   official/rm_base_cmake_example
+
+   原始路径：
+   /home/ros/机械臂/rm_base_cmake_example
+
+   学习重点：
+   - 厂家头文件 rm_base.h / rm_define.h
+   - 动态库 libRM_Base.so.1.0.0
+   - CMake 如何链接厂家库
+   - API 函数签名以头文件为准
+
+学习建议：
+先看用户手册理解设备和安全，再看 API 文档理解函数，最后看本仓库代码怎么把厂家 API 封装成 ROS 节点。
+
+
+二、工作区结构
+==============
+
+主要 ROS package：
+
+rm_75_6f_description
+  RM75-6F 机器人模型、URDF/Xacro、固定两指夹爪、Gazebo 模型。
+
+rm_75_gazebo
+  Gazebo 启动、ros_control 控制器、仿真 world。
+
+rm_75_moveit_config
+  MoveIt 配置、SRDF、规划参数、controllers.yaml / controllers_gazebo.yaml。
+
+rm_75_driver
+  连接真实机械臂控制器的 ROS driver。
+
+rm_75_control
+  提供实物 /rm_75/follow_joint_trajectory action，把 MoveIt 轨迹转换为下发给驱动的 JointPos。
+
+rm_75_demo
+  仿真和实物演示脚本：
+  - sim_01 / sim_02 / sim_03 / sim_04
+  - sim_05 ~ sim_08 柔顺/导纳仿真实验
+  - real_single_joint_step.py
+  - real_wrist_small_step.py
+  - real_teach_pendant.py
+  - real_waypoint_tool.py
+
+rm_75_real_force_control
+  实物六维力和拖动示教工具：
+  - rm75_force_read_only_node
+  - rm75_drag_teach_node
+  - force_read_only.launch
+  - drag_teach.launch
+
+
+三、从 0 编译工作区
+===================
+
+进入工作区：
+
+cd /home/ros/ws_rm_75_6f_robot
+
+如果是新终端：
+
+source /opt/ros/noetic/setup.bash
+
+编译整个工作区：
+
+catkin build
+
+只编译实物力控包：
+
+catkin build rm_75_real_force_control
+
+编译后 source：
+
+source devel/setup.bash
+
+检查 package 是否存在：
+
+rospack find rm_75_gazebo
+rospack find rm_75_moveit_config
+rospack find rm_75_real_force_control
+
+
+四、先在 RViz 中看模型
+======================
+
+目标：
+先不动 Gazebo，也不动实物，只看 URDF 模型是否正常。
+
+命令：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_6f_description display.launch
+
+观察：
+- RViz 中应看到 RM75-6F 机械臂。
+- 如果启用了固定两指夹爪，应看到夹爪挂在 link7 后面。
+- Fixed Frame 通常设为 base_link。
+
+学习重点：
+- link / joint
+- robot_state_publisher
+- joint_state_publisher
+- TF 树
+- URDF/Xacro
+
+
+五、Gazebo + MoveIt 仿真启动
+============================
+
+目标：
+先在仿真里让机械臂动起来，避免一开始就碰实物风险。
+
+启动 Gazebo + MoveIt：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+带桌子、方块、RGB-D 相机：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch \
+  world_name:=$(rospack find rm_75_gazebo)/worlds/rm75_table_cube.world \
+  use_rgbd_camera:=true
+
+带固定两指夹爪：
+
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch \
+  world_name:=$(rospack find rm_75_gazebo)/worlds/rm75_table_cube.world \
+  use_rgbd_camera:=true \
+  use_two_finger_gripper:=true
+
+检查控制器：
+
+rostopic list | grep arm_joint_controller
+
+Gazebo 控制器 action：
+/arm/arm_joint_controller/follow_joint_trajectory
+
+Gazebo 连续命令 topic：
+/arm/arm_joint_controller/command
+
+学习重点：
+- Gazebo 是物理仿真。
+- MoveIt 是规划。
+- ros_control 控制仿真关节。
+- RViz 中看到的是规划场景和机器人状态。
+
+
+六、MoveIt/RViz 中手动规划
+==========================
+
+启动 Gazebo + MoveIt 后，在 RViz MotionPlanning 面板：
+
+建议设置：
+- Planning Group: arm
+- Start State: current
+- Velocity Scaling: 0.05
+- Acceleration Scaling: 0.05
+
+推荐流程：
+1. 先点 Plan，不要直接 Plan & Execute。
+2. 看轨迹是否合理。
+3. 确认没有穿桌子或大幅翻腕。
+4. 再 Execute。
+
+初学不要做：
+- 随机目标 random target。
+- 大幅拖拽末端姿态球。
+- 高速度执行。
+
+
+七、仿真实验脚本学习路线
+========================
+
+脚本目录：
+src/rm_75_robot/rm_75_demo/scripts
+
+1. 场景与规划：
+
+rosrun rm_75_demo sim_01_scene_plan.py
+
+执行：
+
+rosrun rm_75_demo sim_01_scene_plan.py --execute
+
+学习：
+- MoveIt planning scene
+- 桌子/方块碰撞物体
+- Gazebo 物体和 MoveIt 碰撞物体的区别
+
+2. 视觉识别与接近：
+
+rosrun rm_75_demo sim_02_vision_approach.py --color blue
+
+学习：
+- RGB 图像
+- 深度图
+- CameraInfo
+- TF 坐标变换
+- 根据视觉结果生成 MoveIt 目标
+
+3. 抓取流程框架：
+
+rosrun rm_75_demo sim_03_gripper_pick.py
+
+执行：
+
+rosrun rm_75_demo sim_03_gripper_pick.py --execute
+
+学习：
+- 接近
+- 下探
+- 夹爪开合话题
+- attach object
+- 抬起
+
+注意：
+当前固定夹爪还不能开合，它更适合先学习末端工具和碰撞关系。
+
+
+八、仿真柔顺控制学习路线
+========================
+
+核心概念：
+
+阻抗控制：
+位置误差 -> 力
+
+导纳控制：
+外力 -> 位移/速度
+
+当前 Gazebo 控制器是位置轨迹控制器，所以先学外层导纳控制。
+
+已有实验：
+
+1. sim_05
+   虚拟外力 -> 导纳 offset -> 可视化/低频执行。
+
+2. sim_06
+   导纳 offset -> 连续 joint command。
+
+3. sim_07
+   导纳 offset -> /compute_ik -> joint command。
+
+4. sim_08
+   导纳 velocity -> Jacobian DLS 伪逆 -> qdot -> joint command。
+
+推荐先跑 sim_08：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_gazebo arm_75_bringup_moveit.launch
+
+另开终端：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rosrun rm_75_demo sim_08_admittance_jacobian_velocity.py
+
+观察状态：
+
+rostopic echo /rm75_admittance_jacobian/state
+
+学习重点：
+- M/D/K 导纳模型
+- max_offset / max_velocity / max_joint_step 限幅
+- Jacobian
+- 阻尼最小二乘伪逆
+- 奇异位形风险
+
+注意：
+这些是仿真柔顺实验，不直接调用厂家实物力控 API。
+
+
+九、连接实物机械臂
+==================
+
+默认实物信息：
+
+机械臂 IP：
+192.168.1.18
+
+端口：
+8080
+
+电脑侧建议：
+- 与机械臂同网段，例如 192.168.1.x
+- 网线连接正常
+- 急停释放但手边可触达
+- 机械臂周围无障碍物
+
+检查网络：
+
+ping 192.168.1.18
+
+如果 ping 不通：
+- 先不要启动 ROS 控制。
+- 检查网线、机械臂 IP、电脑 IP、示教器通信模式。
+
+
+十、实物 ROS + MoveIt 启动
+==========================
+
+终端 1：启动实物轨迹控制器
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_control rm_75_control.launch
+
+终端 2：启动驱动、MoveIt、RViz
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_bringup rm_robot.launch arm_ip:=192.168.1.18
+
+启动后检查：
+
+rosnode list
+
+应看到类似：
+- /robot_driver
+- /rm_75_control
+- /move_group
+- /robot_state_publisher
+- /rviz
+
+查看关节反馈：
+
+rostopic echo -n1 /joint_states
+
+查看实物 MoveIt action：
+
+rostopic list | grep follow_joint_trajectory
+
+应看到：
+/rm_75/follow_joint_trajectory
+
+实物控制数据流：
+
+MoveIt/RViz
+  -> /rm_75/follow_joint_trajectory
+  -> rm_75_control
+  -> /rm_driver/JointPos
+  -> rm_75_driver
+  -> TCP 192.168.1.18:8080
+  -> 实物机械臂
+  -> /joint_states
+  -> robot_state_publisher
+  -> RViz
+
+注意：
+Gazebo action 是 /arm/arm_joint_controller/follow_joint_trajectory。
+实物 action 是 /rm_75/follow_joint_trajectory。
+不要混淆。
+
+
+十一、让实物机械臂安全小幅运动
+==============================
+
+推荐先用脚本，不要直接手写底层 JointPos。
+
+后 3 个腕部关节小幅运动：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05
+
+真正执行：
+
+rosrun rm_75_demo real_wrist_small_step.py --delta 0.03 --velocity 0.05 --acceleration 0.05 --execute
+
+单关节小幅运动：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05
+
+真正执行：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees 20 --velocity 0.05 --acceleration 0.05 --execute
+
+反方向回来：
+
+rosrun rm_75_demo real_single_joint_step.py --joint joint6 --degrees -20 --velocity 0.05 --acceleration 0.05 --execute
+
+安全原则：
+- 先不加 --execute，只规划。
+- 确认轨迹合理，再执行。
+- 速度和加速度先 5%。
+- 单次角度小。
+- 急停可用。
+
+
+十二、实物六维力读取
+====================
+
+实物力控包：
+rm_75_real_force_control
+
+启动只读六维力节点：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_real_force_control force_read_only.launch
+
+另开终端查看：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+rostopic echo /rm75_force_sensor/wrench
+
+清零六维力：
+
+rosservice call /rm75_force_sensor/zero
+
+清零条件：
+- 末端静止
+- 悬空
+- 不接触外物
+
+已经验证：
+- 能连接 192.168.1.18:8080
+- 能读取 Fx/Fy/Fz/Mx/My/Mz
+- Get_Force_Data 链路可用
+
+
+十三、实物拖动示教
+==================
+
+普通拖动示教已经验证成功：
+- Start_Drag_Teach 成功
+- Stop_Drag_Teach 成功
+
+启动拖动示教节点：
+
+cd /home/ros/ws_rm_75_6f_robot
+source devel/setup.bash
+roslaunch rm_75_real_force_control drag_teach.launch use_multi_drag:=false
+
+另开终端进入拖动示教：
+
+rosservice call /rm75_drag_teach/start
+
+退出拖动示教：
+
+rosservice call /rm75_drag_teach/stop
+
+限时 10 秒测试：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+复合六维力拖动示教：
+
+Start_Multi_Drag_Teach(mode=1) 当前返回 1。
+错误码 1 对应 CONTROLLER_DATE_RETURN_FALSE。
+说明控制器当前拒绝复合六维力拖动，后续需要排查示教器设置、六维力标定状态、固件或控制器模式。
+
+
+十四、实物力位混合柔顺控制
+==========================
+
+官方核心接口：
+
+Set_Force_Postion(sock, sensor, mode, direction, N, block)
+
+参数：
+
+sensor:
+0 = 一维力
+1 = 六维力
+
+mode:
+0 = 基坐标系
+1 = 工具坐标系
+
+direction:
+0 = X
+1 = Y
+2 = Z
+3 = Rx
+4 = Ry
+5 = Rz
+
+N:
+单位是 0.1N。
+20 = 2N。
+50 = 5N。
+
+推荐第一轮：
+
+Set_Force_Postion(sock, 1, 1, 2, 20, RM_BLOCK)
+
+含义：
+六维力，工具坐标系，Z 方向，2N。
+
+停止：
+
+Stop_Force_Postion(sock, RM_BLOCK)
+
+注意：
+这一阶段还没有正式做完整实验。
+下一步应该写 ROS service 节点封装 start/stop，并做 2N 小力软接触测试。
+
+
+十五、透传力位混合补偿
+======================
+
+官方接口：
+
+Start_Force_Position_Move(sock, block)
+Force_Position_Move_POSE(sock, pose, sensor, mode, dir, force)
+Force_Position_Move_Joint(sock, joint, sensor, mode, dir, force)
+Stop_Force_Postion_Move(sock, block)
+
+用途：
+用户自己周期性发送目标位姿/关节角，厂家底层同时做力位混合补偿。
+
+适合后续擦桌子：
+
+x/y 方向：
+自己发送擦拭轨迹。
+
+z 方向：
+厂家底层维持 2N~5N 接触力。
+
+注意：
+Force_Position_Move_* 里的 force 单位是 N。
+Set_Force_Postion 里的 N 单位是 0.1N。
+
+
+十六、关闭和安全
+================
+
+仿真关闭：
+- 关闭 RViz
+- Ctrl+C 停止 roslaunch
+- 必要时 rosnode cleanup
+
+实物关闭：
+1. 不再发送 Execute。
+2. 如果在拖动示教，先 Stop_Drag_Teach。
+3. 如果在力位混合，先 Stop_Force_Postion。
+4. 关闭 RViz / MoveIt。
+5. 关闭 rm_75_control。
+6. 关闭 rm_75_driver。
+7. 检查 rosnode list。
+
+排查残留进程：
+
+ps -eo pid,ppid,cmd | grep -E 'roscore|rosmaster|roslaunch|rm_driver|rm_control|move_group|robot_state_publisher|rviz' | grep -v grep
+
+原则：
+进入某个控制模式，就必须知道退出命令。
+
+
+十七、已有学习笔记索引
+======================
+
+实物 ROS / MoveIt：
+study/rm75_6f_real_robot_ros_notes.txt
+
+仿真抓取：
+study/rm75_6f_sim_experiments_guide.txt
+
+导纳柔顺：
+study/rm75_6f_admittance_virtual_force_experiment.txt
+study/rm75_6f_admittance_streaming_command_experiment.txt
+study/rm75_6f_admittance_ik_position_experiment.txt
+study/rm75_6f_admittance_jacobian_velocity_experiment.txt
+
+实物柔顺 API：
+study/rm75_6f_real_force_compliance_api_notes.txt
+study/rm75_6f_real_robot_compliance_operation_guide.txt
+
+实物六维力和拖动示教：
+study/rm75_6f_real_force_read_only_debug.txt
+study/rm75_6f_real_drag_teach_debug.txt
+
+实物柔顺学习计划：
+study/rm75_6f_real_compliance_learning_plan.txt
+
+实物力控代码讲解：
+study/rm75_6f_real_force_control_code_walkthrough.txt
+
+本总指南：
+study/rm75_6f_from_zero_complete_learning_guide.txt
+
+
+十八、建议的最终学习顺序
+========================
+
+第 1 天：
+- 看用户手册。
+- 看工作区结构。
+- RViz 显示模型。
+
+第 2 天：
+- 启动 Gazebo + MoveIt。
+- RViz Plan / Execute。
+- 跑 sim_01。
+
+第 3 天：
+- 加桌子、方块、RGB-D 相机。
+- 跑 sim_02 / sim_03。
+
+第 4 天：
+- 学导纳控制理论。
+- 跑 sim_05 / sim_06。
+
+第 5 天：
+- 跑 sim_07 / sim_08。
+- 理解 IK 和 Jacobian 柔顺差别。
+
+第 6 天：
+- 连接实物。
+- ping、joint_states、MoveIt action 检查。
+- 小幅 MoveIt 关节运动。
+
+第 7 天：
+- 读取六维力。
+- 清零。
+- 手推确认方向。
+
+第 8 天：
+- 普通拖动示教。
+- 记录手感。
+
+第 9 天：
+- 普通力位混合 2N 小力。
+- 只做软接触。
+
+第 10 天：
+- 低速接触移动。
+- 为擦桌子做准备。
+
+十九、一句话总路线
+==================
+
+先官方资料和安全，
+再 RViz 看模型，
+再 Gazebo + MoveIt 仿真运动，
+再实物 MoveIt 小幅运动，
+再六维力读取，
+再拖动示教，
+最后进入力位混合和擦桌子柔顺作业。

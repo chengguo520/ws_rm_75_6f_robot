@@ -1,0 +1,308 @@
+RM75-6F 实物力控工程代码讲解
+============================
+
+讲解目标
+--------
+- 解释当前实物力控包 rm_75_real_force_control 的代码结构。
+- 说明六维力只读节点、拖动示教节点、launch 文件、CMake 链接厂家 SDK 的作用。
+- 帮助后续继续扩展普通力位混合和透传力位混合。
+
+工程位置
+--------
+src/rm_75_robot/rm_75_real_force_control
+
+文件结构：
+
+package.xml
+CMakeLists.txt
+launch/force_read_only.launch
+launch/drag_teach.launch
+src/rm75_force_read_only_node.cpp
+src/rm75_drag_teach_node.cpp
+
+为什么单独建包
+--------------
+这个包只面向实物 RM75-6F，不走 Gazebo，也不走 MoveIt 仿真路径。
+
+好处：
+- 实物控制代码和仿真柔顺 demo 隔离。
+- 编译和调试时不影响 Gazebo。
+- 后续加入力位混合、透传力位混合、急停服务时结构更清楚。
+
+CMakeLists.txt 讲解
+-------------------
+关键依赖：
+geometry_msgs
+roscpp
+std_srvs
+
+geometry_msgs 用于发布 WrenchStamped。
+std_srvs 用于 Trigger 服务，例如清零、开始拖动、停止拖动。
+
+厂家 SDK 路径：
+/home/ros/机械臂/rm_base_cmake_example
+
+CMake 中配置：
+RM_BASE_INCLUDE_DIR = linux-x86/include
+RM_BASE_LIBRARY = linux-x86/lib/libRM_Base.so.1.0.0
+
+代码通过：
+add_library(rm_base_vendor SHARED IMPORTED)
+
+把厂家 libRM_Base.so.1.0.0 作为外部动态库链接进 ROS 节点。
+
+为什么要创建 vendor symlink：
+厂家文件名是 libRM_Base.so.1.0.0，但运行时库依赖名是 libRM_Base.so.1。
+所以 CMake 在节点目录旁边生成：
+vendor/libRM_Base.so.1.0.0
+vendor/libRM_Base.so.1
+
+并设置：
+BUILD_RPATH "$ORIGIN/vendor"
+INSTALL_RPATH "$ORIGIN/vendor"
+
+这样 roslaunch 启动时不用手动 export LD_LIBRARY_PATH。
+
+rm75_force_read_only_node.cpp 讲解
+---------------------------------
+这个节点负责：
+- 初始化厂家 API。
+- 连接机械臂控制器。
+- 周期读取六维力。
+- 发布 ROS topic。
+- 提供清零服务。
+- 提供停止普通力位混合的安全服务。
+
+它不会调用任何运动接口，也不会开启力控。
+
+核心厂家 API：
+RM_API_Init(vendorCallback)
+Arm_Socket_Start(ip, port, ARM_75, timeout)
+Arm_Sockrt_State(socket)
+Get_Force_Data(socket, force)
+Clear_Force_Data(socket, RM_BLOCK)
+Stop_Force_Postion(socket, RM_BLOCK)
+Arm_Socket_Close(socket)
+RM_API_UnInit()
+
+ROS 参数：
+arm_ip:
+  默认 192.168.1.18
+
+arm_port:
+  默认 8080
+
+rate_hz:
+  默认 10Hz
+  如果超过 20Hz，会被限制到 20Hz。
+  原因是厂家文档要求 Get_Force_Data 周期不能小于 50ms。
+
+zero_on_start:
+  默认 false。
+  如果设为 true，节点启动时会清零六维力。
+  实物上建议手动清零，因为清零要求末端静止且不接触外界。
+
+frame_id:
+  默认 rm75_tool_force_sensor。
+  这只是 ROS 消息里的坐标名标签，不代表已经完成 TF 标定。
+
+发布话题：
+/rm75_force_sensor/wrench
+
+消息类型：
+geometry_msgs/WrenchStamped
+
+数据含义：
+force.x = Fx，单位 N
+force.y = Fy，单位 N
+force.z = Fz，单位 N
+torque.x = Mx，单位 Nm
+torque.y = My，单位 Nm
+torque.z = Mz，单位 Nm
+
+服务 1：
+/rm75_force_sensor/zero
+
+作用：
+调用 Clear_Force_Data。
+只清零传感器偏置，不控制机械臂运动。
+
+使用条件：
+末端静止、悬空、不接触外界。
+
+服务 2：
+/rm75_force_control/stop_hybrid
+
+作用：
+调用 Stop_Force_Postion。
+如果之前误开了普通力位混合，这个服务可以尝试退出。
+
+安全设计：
+- 节点析构时关闭 socket。
+- 节点析构时 RM_API_UnInit。
+- 读取失败时只打印 warning，不发送其他控制命令。
+
+force_read_only.launch 讲解
+---------------------------
+启动命令：
+
+roslaunch rm_75_real_force_control force_read_only.launch
+
+这个 launch 只启动 rm75_force_read_only_node。
+它不会启动 Gazebo、MoveIt、运动控制器或力位混合。
+
+常用参数：
+
+arm_ip:=192.168.1.18
+rate_hz:=10.0
+zero_on_start:=false
+
+rm75_drag_teach_node.cpp 讲解
+----------------------------
+这个节点负责官方拖动示教：
+- 连接机械臂控制器。
+- 提供 start 服务进入拖动示教。
+- 提供 stop 服务退出拖动示教。
+- 支持普通拖动示教 Start_Drag_Teach。
+- 支持复合拖动示教 Start_Multi_Drag_Teach。
+- 支持失败后 fallback 到普通拖动示教。
+- 支持 auto_start 和 auto_stop_after_sec 限时测试。
+
+核心厂家 API：
+RM_API_Init(vendorCallback)
+Arm_Socket_Start(ip, port, ARM_75, timeout)
+Start_Multi_Drag_Teach(socket, mode, RM_BLOCK)
+Start_Drag_Teach(socket, RM_BLOCK)
+Stop_Drag_Teach(socket, RM_BLOCK)
+Clear_Force_Data(socket, RM_BLOCK)
+Stop_Force_Postion(socket, RM_BLOCK)
+Stop_Force_Postion_Move(socket, RM_BLOCK)
+Arm_Socket_Close(socket)
+RM_API_UnInit()
+
+ROS 参数：
+arm_ip:
+  默认 192.168.1.18
+
+arm_port:
+  默认 8080
+
+multi_drag_mode:
+  默认 1。
+  mode=0 电流环模式。
+  mode=1 使用末端六维力，只动位置。
+  mode=2 使用末端六维力，只动姿态。
+  mode=3 使用末端六维力，位置和姿态同时动。
+
+use_multi_drag:
+  true 时优先调用 Start_Multi_Drag_Teach。
+  false 时直接调用 Start_Drag_Teach。
+
+fallback_to_basic_drag:
+  true 时，如果复合拖动失败，会尝试普通拖动。
+
+zero_force_before_start:
+  true 时，进入拖动示教前调用 Clear_Force_Data。
+
+stop_hybrid_before_start:
+  true 时，进入拖动示教前尝试调用：
+  Stop_Force_Postion
+  Stop_Force_Postion_Move
+  目的是避免力位混合模式和拖动示教模式混用。
+
+auto_start:
+  true 时，节点启动后自动进入拖动示教。
+
+auto_stop_after_sec:
+  大于 0 时，自动进入后到时间自动退出拖动示教。
+  适合第一次做 10 秒安全测试。
+
+服务 1：
+/rm75_drag_teach/start
+
+作用：
+进入拖动示教。
+
+如果 use_multi_drag=true：
+优先 Start_Multi_Drag_Teach。
+如果失败且 fallback_to_basic_drag=true：
+再尝试 Start_Drag_Teach。
+
+服务 2：
+/rm75_drag_teach/stop
+
+作用：
+调用 Stop_Drag_Teach 退出拖动示教。
+
+析构安全：
+如果节点退出时 drag_active=true，会自动调用 Stop_Drag_Teach。
+这可以降低忘记退出拖动示教的风险。
+
+drag_teach.launch 讲解
+----------------------
+手动启动：
+
+roslaunch rm_75_real_force_control drag_teach.launch use_multi_drag:=false
+
+另开终端：
+
+rosservice call /rm75_drag_teach/start
+rosservice call /rm75_drag_teach/stop
+
+限时测试：
+
+roslaunch rm_75_real_force_control drag_teach.launch auto_start:=true auto_stop_after_sec:=10 use_multi_drag:=false
+
+这条命令会：
+1. 连接机械臂。
+2. 清零六维力。
+3. 进入普通拖动示教。
+4. 10 秒后自动 Stop_Drag_Teach。
+5. 节点退出。
+
+当前实物测试结果
+----------------
+六维力只读：
+- 成功连接 192.168.1.18:8080。
+- 成功读取六维力。
+- 未清零时读数大致为 Fx=-1.7N, Fy=1.1N, Fz=-15.1N。
+
+复合拖动示教：
+- Start_Multi_Drag_Teach(mode=1) 返回 1。
+- 错误码 1 对应 CONTROLLER_DATE_RETURN_FALSE。
+- 说明控制器当前拒绝复合六维力拖动。
+
+普通拖动示教：
+- Start_Drag_Teach 成功。
+- Stop_Drag_Teach 成功。
+- 官方基础拖动示教能力已经验证可用。
+
+后续如何扩展
+------------
+下一步可以新增普通力位混合节点：
+
+服务：
+/rm75_force_control/start_position_force
+  调用 Set_Force_Postion
+
+/rm75_force_control/stop_position_force
+  调用 Stop_Force_Postion
+
+建议参数：
+sensor = 1
+mode = 1
+direction = 2
+N = 20
+
+含义：
+六维力，工具坐标系，Z 方向，2N。
+
+更高级可以新增透传力位混合节点：
+
+Start_Force_Position_Move
+Force_Position_Move_POSE
+Force_Position_Move_Joint
+Stop_Force_Postion_Move
+
+这条线用于后续擦桌子：
+x/y 方向自己下发轨迹，z 方向由厂家底层力补偿。
